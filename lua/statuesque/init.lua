@@ -26,7 +26,19 @@ local function maybe_publish_manifold_status(surface_or_provider)
 end
 
 function M.setup(config)
+    config = config or {}
     require('statuesque.config').configure(config)
+    require('statuesque.style').define_default_highlights()
+
+    if config.preset ~= nil and config.preset ~= false then
+        local preset_opts = type(config.preset) == 'table' and config.preset or {}
+        require('statuesque.presets.default').install(preset_opts)
+    end
+
+    if config.manifold ~= false then
+        local manifold_opts = type(config.manifold) == 'table' and config.manifold or {}
+        require('statuesque.manifold').auto_setup(manifold_opts)
+    end
 end
 
 --- Normalize a recursive render specification into Statuesque's canonical node list.
@@ -44,36 +56,19 @@ end
 --- @return any
 function M.render(render_spec, target, opts)
     target = target or 'text'
+    return require('statuesque.backend').render(target, render_spec, opts)
+end
 
-    if target == 'debug' then
-        return require('statuesque.render.debug').render(render_spec, opts)
-    end
+function M.register_backend(name, backend)
+    require('statuesque.backend').register(name, backend)
+end
 
-    if target == 'text' then
-        return require('statuesque.render.text').render(render_spec, opts)
-    end
+function M.invalidate(key)
+    require('statuesque.cache').invalidate(key)
+end
 
-    if target == 'incline' then
-        return require('statuesque.render.incline').render(render_spec, opts)
-    end
-
-    if target == 'statusline' then
-        return require('statuesque.render.statusline').render(render_spec, opts)
-    end
-
-    if target == 'tabline' then
-        return require('statuesque.render.tabline').render(render_spec, opts)
-    end
-
-    if target == 'winbar' then
-        return require('statuesque.render.winbar').render(render_spec, opts)
-    end
-
-    if target == 'vim' then
-        return require('statuesque.render.vim').render(render_spec, opts)
-    end
-
-    error(('unsupported statuesque render target: %s'):format(target))
+function M.compose(components, opts)
+    return require('statuesque.style').compose(components, opts)
 end
 
 --- Register a named render provider.
@@ -121,6 +116,14 @@ function M.render_surface(surface, target, opts)
     return M.render(M.resolve_surface(surface, opts), target, opts)
 end
 
+--- Publish a configured surface to any detected external consumers.
+--- @param surface? string
+--- @param opts? table
+--- @return integer
+function M.publish(surface, opts)
+    return require('statuesque.manifold').publish_status(surface or 'statusline', opts)
+end
+
 --- Produce a Vim expression suitable for a statusline-family option.
 --- @param surface string
 --- @param target 'statusline'|'tabline'|'winbar'
@@ -134,15 +137,11 @@ end
 --- Install a configured surface into a Vim statusline-family option.
 --- @param surface string
 --- @param target 'statusline'|'tabline'|'winbar'
---- @param opts? { globalstatus?: boolean }
-function M.install_surface(surface, target, opts)
-    opts = opts or {}
+function M.install_surface(surface, target)
     local expression = M.surface_expression(surface, target)
 
     if target == 'statusline' then
-        if opts.globalstatus ~= false then
-            vim.o.laststatus = 3
-        end
+        vim.o.laststatus = 3
         vim.o.statusline = expression
         return
     end

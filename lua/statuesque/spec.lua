@@ -1,7 +1,11 @@
 local M = {}
+local cache = require('statuesque.cache')
+local publisher = require('statuesque.publisher')
 
 local KNOWN_FIELDS = {
     'text',
+    'raw',
+    'align',
     'hl',
     'style',
     'on_click',
@@ -12,6 +16,11 @@ local KNOWN_FIELDS = {
     'max_width',
     'truncate',
     'target',
+    'render',
+    'cache',
+    'separator',
+    'separator_side',
+    '_statuesque_cache_key',
 }
 
 local KNOWN_FIELD_SET = {}
@@ -80,9 +89,12 @@ local function normalize_segment(value, opts)
     if value.text ~= nil then
         segment.text = tostring(value.text)
     end
+    if value.raw ~= nil then
+        segment.raw = tostring(value.raw)
+    end
 
     for _, field in ipairs(KNOWN_FIELDS) do
-        if field ~= 'text' and value[field] ~= nil then
+        if field ~= 'text' and field ~= 'raw' and field ~= 'render' and field ~= 'cache' and value[field] ~= nil then
             segment[field] = copy_table(value[field])
         end
     end
@@ -103,6 +115,61 @@ local function normalize_segment(value, opts)
     return { segment }
 end
 
+local function context_for(opts)
+    return opts.context or opts
+end
+
+local function fallback_key(opts, suffix)
+    opts.__statuesque_dynamic_index = (opts.__statuesque_dynamic_index or 0) + 1
+    return ('%s:%d'):format(suffix or 'dynamic', opts.__statuesque_dynamic_index)
+end
+
+local function inherit_fields(parent, nodes)
+    if #nodes ~= 1 or type(nodes[1]) ~= 'table' then
+        return nodes
+    end
+
+    local child = nodes[1]
+    for _, field in ipairs(KNOWN_FIELDS) do
+        if field ~= 'text' and field ~= 'raw' and field ~= 'children' and field ~= 'render' and field ~= 'cache' then
+            if parent[field] ~= nil and child[field] == nil then
+                child[field] = copy_table(parent[field])
+            end
+        end
+    end
+
+    return nodes
+end
+
+local function normalize_dynamic(value, opts, render)
+    local key = cache.key_for(value, type(value) == 'table' and value.id or fallback_key(opts, 'component'))
+    if publisher.is_component(value) then
+        publisher.ensure_subscription(value, key, opts)
+    end
+
+    return cache.get(key, function()
+        local rendered = render()
+        local nodes = M.normalize(rendered, opts)
+        if type(value) == 'table' then
+            nodes = inherit_fields(value, nodes)
+        end
+        if key ~= nil then
+            if #nodes == 1 then
+                nodes[1]._statuesque_cache_key = key
+            elseif #nodes > 1 then
+                nodes = {
+                    {
+                        role = 'cached-fragment',
+                        _statuesque_cache_key = key,
+                        children = nodes,
+                    },
+                }
+            end
+        end
+        return nodes
+    end)
+end
+
 --- Normalize a recursive render specification into a canonical list of nodes.
 --- @param render_spec any
 --- @param opts? table
@@ -115,6 +182,12 @@ function M.normalize(render_spec, opts)
     end
 
     local render_type = type(render_spec)
+    if render_type == 'function' then
+        return normalize_dynamic(render_spec, opts, function()
+            return render_spec(context_for(opts))
+        end)
+    end
+
     if render_type == 'string' or render_type == 'number' or render_type == 'boolean' then
         return {
             {
@@ -125,6 +198,18 @@ function M.normalize(render_spec, opts)
 
     if render_type ~= 'table' then
         error(('unsupported render node type: %s'):format(render_type))
+    end
+
+    if publisher.is_component(render_spec) then
+        return normalize_dynamic(render_spec, opts, function()
+            return publisher.render(render_spec, context_for(opts))
+        end)
+    end
+
+    if type(render_spec.render) == 'function' then
+        return normalize_dynamic(render_spec, opts, function()
+            return render_spec.render(context_for(opts), render_spec)
+        end)
     end
 
     if not has_known_field(render_spec) then

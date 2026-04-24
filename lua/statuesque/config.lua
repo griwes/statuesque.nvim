@@ -15,9 +15,14 @@
 
 --- @class RenderNode
 --- @field text? string
+--- @field raw? string
+--- @field align? 'left'|'center'|'right'
 --- @field hl? HighlightDescription
 --- @field style? table<string, any>
 --- @field children? RenderNode[]
+--- @field render? RenderCallback
+--- @field cache? CacheOptions|boolean
+--- @field separator? "section"|"inner"|string
 --- @field on_click? ClickHandler
 --- @field id? string
 --- @field role? string
@@ -27,7 +32,7 @@
 --- @field truncate? 'left'|'right'|'middle'|'hide'
 --- @field target? 'statusline'|'tabline'|'winbar'|'incline'|'custom'
 
---- @alias RenderResult string|string[]|RenderNode|RenderNode[]
+--- @alias RenderResult string|string[]|RenderNode|RenderNode[]|fun(context?: table):RenderResult
 
 --- @class CacheOptions
 --- @field cache.invalidate_on EventDescription|EventDescription[]
@@ -56,6 +61,8 @@
 
 --- @class Configuration the configuration of the plugin
 --- @field targets? table<string, Target> a map from a target name to its configuration
+--- @field preset? boolean|table
+--- @field manifold? boolean|table
 local default_config = {
     targets = {},
 }

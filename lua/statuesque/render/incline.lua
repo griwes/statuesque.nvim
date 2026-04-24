@@ -1,6 +1,39 @@
+local cache = require('statuesque.cache')
 local spec = require('statuesque.spec')
+local style = require('statuesque.style')
 
 local M = {}
+
+local function copy(value)
+    if type(value) ~= 'table' then
+        return value
+    end
+
+    local copied = {}
+    for key, child in pairs(value) do
+        copied[key] = copy(child)
+    end
+    return copied
+end
+
+local function defaults_variant(ctx)
+    local defaults = ctx.backend_defaults or {}
+    return table.concat({
+        defaults.left_separator or '',
+        defaults.right_separator or '',
+        defaults.inner_left_separator or '',
+        defaults.inner_right_separator or '',
+        defaults.separator_padding or '',
+    }, ',')
+end
+
+local function variant_key(ctx)
+    return ('side=%s,separator_side=%s,defaults=%s'):format(
+        ctx.side or '',
+        ctx.separator_side or '',
+        defaults_variant(ctx)
+    )
+end
 
 local function copy_metadata(node)
     local metadata = {}
@@ -33,23 +66,31 @@ local function incline_group(hl)
         return hl
     end
 
-    if type(hl) == 'table' and vim.tbl_islist and vim.tbl_islist(hl) then
+    if type(hl) == 'table' and vim.islist and vim.islist(hl) then
         return incline_group(hl[#hl])
     end
 
     return nil
 end
 
-local function render_node(node)
+local render_node
+
+local function render_node_uncached(node, ctx)
     local chunks = {}
 
     if node.text ~= nil then
         chunks[#chunks + 1] = spec.truncate_text(node.text, node)
+    elseif node.raw ~= nil then
+        chunks[#chunks + 1] = node.raw
+    elseif node.align ~= nil then
+        chunks[#chunks + 1] = ''
+    elseif node.separator ~= nil then
+        chunks[#chunks + 1] = style.separator_text(node.separator, 'incline', ctx)
     end
 
     if node.children ~= nil then
         for _, child in ipairs(node.children) do
-            chunks[#chunks + 1] = render_node(child)
+            chunks[#chunks + 1] = render_node(child, ctx)
         end
     end
 
@@ -71,15 +112,24 @@ local function render_node(node)
     return rendered
 end
 
+function render_node(node, ctx)
+    return copy(cache.get_rendered(ctx.target, node._statuesque_cache_key, variant_key(ctx), function()
+        return render_node_uncached(node, ctx)
+    end))
+end
+
 --- Render a spec into a deliberately limited Incline-style nested table.
 --- Unsupported semantic fields are preserved under `statuesque` metadata.
 --- @param render_spec any
 --- @param opts? table
 --- @return table
 function M.render(render_spec, opts)
+    local ctx = vim.tbl_extend('force', opts or {}, {
+        target = 'incline',
+    })
     local rendered = {}
     for _, node in ipairs(spec.normalize(render_spec, opts)) do
-        rendered[#rendered + 1] = render_node(node)
+        rendered[#rendered + 1] = render_node(node, ctx)
     end
     return rendered
 end

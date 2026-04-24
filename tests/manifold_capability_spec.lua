@@ -177,4 +177,62 @@ describe('statuesque manifold capability', function()
         assert_equal(#published, 1)
         assert_equal(published[1].spec[1].text, 'second')
     end)
+
+    it('auto-detects a Manifold host and installs the host status provider from normal setup', function()
+        local statuesque = require('statuesque')
+        local installed = false
+        package.loaded['manifold'] = {
+            is_host = function()
+                return true
+            end,
+            install_statusline_provider = function(opts)
+                installed = opts.surface == 'statusline' and opts.install == true
+                return installed
+            end,
+        }
+
+        statuesque.setup({})
+
+        package.loaded['manifold'] = nil
+
+        assert(installed)
+    end)
+
+    it('auto-detects a Manifold child attachment and exports nested editor status without local statusline', function()
+        local statuesque = require('statuesque')
+        local original_sockconnect = vim.fn.sockconnect
+        local original_rpcnotify = vim.fn.rpcnotify
+        local published = {}
+
+        vim.g.manifold_child_control = {
+            attachments = {
+                ['manifold:child:1'] = {
+                    host_server = '/tmp/manifold.sock',
+                },
+            },
+        }
+        vim.fn.sockconnect = function()
+            return 42
+        end
+        vim.fn.rpcnotify = function(_, _, _, args)
+            published[#published + 1] = args[2]
+            return true
+        end
+
+        statuesque.setup({})
+
+        local did_publish = vim.wait(1000, function()
+            return #published >= 1
+        end, 10)
+
+        vim.fn.sockconnect = original_sockconnect
+        vim.fn.rpcnotify = original_rpcnotify
+        vim.g.manifold_child_control = nil
+
+        assert(did_publish)
+        assert_equal(published[1].kind, 'statuesque.status_update')
+        assert_equal(published[1].spec[1].role, 'child-editor-status')
+        assert_equal(published[1].spec[1].children[1].role, 'mode')
+        assert_equal(vim.o.laststatus, 0)
+    end)
 end)

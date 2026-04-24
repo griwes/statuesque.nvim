@@ -10,7 +10,7 @@ render specs and Statuesque translates those specs into target-specific output.
 
 ## Render Spec
 
-A render spec is a string, a segment table, or a nested list of render specs.
+A render spec is a string, a segment table, a function returning a render spec, a publisher component, or a nested list of render specs.
 
 ```lua
 local spec = {
@@ -32,6 +32,9 @@ local spec = {
 Supported segment fields:
 
 - `text`: literal text.
+- `align`: semantic alignment markers, lowered by backends that support them.
+- `raw`: backend-specific raw text. Prefer semantic fields such as `align`
+  for portable render specs.
 - `hl`: highlight group name or inline highlight definition.
 - `style`: target-neutral style metadata for adapters that can use it.
 - `children`: recursive child specs.
@@ -40,6 +43,56 @@ Supported segment fields:
 - `role`: producer-defined semantic role such as `domain`, `tab`, or `status`.
 - `priority`, `min_width`, `max_width`, `truncate`: layout hints.
 - `target`: optional target hint.
+- `render`: function-backed element. The function receives the render context and returns a render spec.
+- `cache`: cache policy. `true` or `{ key = ... }` caches both the normalized fragment and backend-rendered output until `statuesque.invalidate(key)`. Anonymous `cache = true` table components are keyed by table identity; use `{ key = ... }` when a cache should be shared across equivalent component instances.
+- `separator`: backend-specific separator request such as `'section'` or `'inner'`.
+
+Publisher components are tables that advertise `statuesque_component = true`
+and provide `render(context)` plus optional `subscribe(self, notify)`.
+`notify()` invalidates the component cache and schedules a status redraw.
+
+## Presets
+
+```lua
+require('statuesque').setup({
+    manifold = false,
+    preset = true,
+})
+```
+
+The default preset installs a global statusline, tabline, and winbar. It uses a
+section-style layout with interpolated styles instead of lualine's strict
+`a/b/c/x/y/z` segment model. Built-in widgets cover mode, filename, diagnostics,
+git branch, filetype, location, progress, cwd, hostname, static text, and a
+tabulature bridge.
+
+`statuesque.compose()` accepts either a simple component list or explicit
+`{ left = {...}, right = {...} }` sections. Right sections are separated with
+right-oriented glyphs and emit a leading right boundary separator by default.
+Interpolated section styles enforce readable foreground/background contrast;
+set `min_contrast` on the compose options to tune the threshold. When a
+generated foreground is unreadable, Statuesque first tries softer dark/light
+fallbacks before falling back to pure black or white.
+Statusline composition uses the current editor mode as its outer section style
+by default; set `mode_style = false` to opt out. Other surfaces can opt in with
+`mode_style = true` or a specific mode name. Mode styles are derived from
+`lualine_a_<mode>` highlights when available and then contrast-checked against
+the same readability policy used by interpolated sections. Generated styles
+stop short of the pure inner color by default so the last segment still retains
+some of the main outer color; set `inner_mix = 1` to use the pure inner
+endpoint.
+Default sigils use a fixed accent that is intentionally separate from the mode
+highlight palette.
+When `tabulature.nvim` is present, the default tabline consumes Tabulature's
+Statuesque render specs and keeps the current working directory as right-side
+context. Without Tabulature, the tabline falls back to a compact cwd bar.
+Vim statusline-family targets lower the semantic alignment marker to `%=`.
+Incline-style separators can be oriented with `{ side = 'left' }` or
+`{ side = 'right' }` render/backend options.
+
+Statuesque intentionally supports only Neovim's global statusline mode when it
+installs a statusline; `install_surface(..., 'statusline')` always sets
+`laststatus=3`.
 
 ## API
 
@@ -51,6 +104,12 @@ local plain = statuesque.render(spec, 'text')
 local debug = statuesque.render(spec, 'debug')
 local tabline = statuesque.render(spec, 'tabline')
 local incline = statuesque.render(spec, 'incline')
+local composed = statuesque.compose({
+    require('statuesque.widgets').mode(),
+    require('statuesque.widgets').filename(),
+}, {
+    surface = 'statusline',
+})
 
 statuesque.register_provider('domains', function(context)
     return spec
@@ -58,6 +117,12 @@ end)
 
 statuesque.set_surface('tabline', 'domains')
 statuesque.install_surface('tabline', 'tabline')
+
+statuesque.register_backend('custom', {
+    render = function(render_spec, opts)
+        return statuesque.render(render_spec, 'text', opts)
+    end,
+})
 ```
 
 ## Targets
