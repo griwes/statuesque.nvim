@@ -1,9 +1,20 @@
 local cache = require('statuesque.cache')
+local context = require('statuesque.context')
 local spec = require('statuesque.spec')
 local style = require('statuesque.style')
 
 local M = {}
 
+--- @param value any
+--- @return string
+local function encode_variant_value(value)
+    value = tostring(value or '')
+    return ('%d:%s'):format(#value, value)
+end
+
+--- @generic T
+--- @param value T
+--- @return T
 local function copy(value)
     if type(value) ~= 'table' then
         return value
@@ -16,17 +27,22 @@ local function copy(value)
     return copied
 end
 
+--- @param ctx statuesque.RenderContext
+--- @return string
 local function defaults_variant(ctx)
     local defaults = ctx.backend_defaults or {}
     return table.concat({
-        defaults.left_separator or '',
-        defaults.right_separator or '',
-        defaults.inner_left_separator or '',
-        defaults.inner_right_separator or '',
-        defaults.separator_padding or '',
-    }, ',')
+        encode_variant_value(defaults.left_separator),
+        encode_variant_value(defaults.right_separator),
+        encode_variant_value(defaults.inner_left_separator),
+        encode_variant_value(defaults.inner_right_separator),
+        encode_variant_value(defaults.separator_padding),
+        encode_variant_value(defaults.side),
+    }, '|')
 end
 
+--- @param ctx statuesque.RenderContext
+--- @return string
 local function variant_key(ctx)
     return ('side=%s,separator_side=%s,defaults=%s'):format(
         ctx.side or '',
@@ -35,6 +51,8 @@ local function variant_key(ctx)
     )
 end
 
+--- @param node statuesque.NormalizedNode
+--- @return table?
 local function copy_metadata(node)
     local metadata = {}
 
@@ -61,6 +79,8 @@ local function copy_metadata(node)
     return metadata
 end
 
+--- @param hl? statuesque.Highlight
+--- @return string?
 local function incline_group(hl)
     if type(hl) == 'string' then
         return hl
@@ -75,6 +95,9 @@ end
 
 local render_node
 
+--- @param node statuesque.NormalizedNode
+--- @param ctx statuesque.RenderContext
+--- @return string|table
 local function render_node_uncached(node, ctx)
     local chunks = {}
 
@@ -112,6 +135,9 @@ local function render_node_uncached(node, ctx)
     return rendered
 end
 
+--- @param node statuesque.NormalizedNode
+--- @param ctx statuesque.RenderContext
+--- @return string|table
 function render_node(node, ctx)
     return copy(cache.get_rendered(ctx.target, node._statuesque_cache_key, variant_key(ctx), function()
         return render_node_uncached(node, ctx)
@@ -120,15 +146,13 @@ end
 
 --- Render a spec into a deliberately limited Incline-style nested table.
 --- Unsupported semantic fields are preserved under `statuesque` metadata.
---- @param render_spec any
---- @param opts? table
---- @return table
+--- @param render_spec statuesque.RenderSpec
+--- @param opts? statuesque.RenderContext
+--- @return any[]
 function M.render(render_spec, opts)
-    local ctx = vim.tbl_extend('force', opts or {}, {
-        target = 'incline',
-    })
+    local ctx = context.with_target(opts, 'incline')
     local rendered = {}
-    for _, node in ipairs(spec.normalize(render_spec, opts)) do
+    for _, node in ipairs(spec.normalize(render_spec, ctx)) do
         rendered[#rendered + 1] = render_node(node, ctx)
     end
     return rendered

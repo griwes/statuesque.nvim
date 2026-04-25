@@ -37,6 +37,36 @@ local function assert_separator(node, glyph)
     assert_equal(node.children[3].text, ' ')
 end
 
+local function assert_unpadded_separator(node, glyph)
+    assert_equal(#node.children, 1)
+    assert_equal(node.children[1].text, glyph)
+end
+
+local function assert_gapped_leading_separator(node, glyph)
+    assert_equal(#node.children, 2)
+    assert_equal(node.children[1].text, glyph)
+    assert_equal(node.children[2].text, ' ')
+end
+
+local function assert_gapped_trailing_separator(node, glyph)
+    assert_equal(#node.children, 2)
+    assert_equal(node.children[1].text, ' ')
+    assert_equal(node.children[2].text, glyph)
+end
+
+local function with_runtimepath(prefix, body)
+    local previous_runtimepath = vim.o.runtimepath
+    vim.opt.runtimepath:prepend(prefix)
+    local results = { pcall(body) }
+    vim.o.runtimepath = previous_runtimepath
+
+    if not results[1] then
+        error(results[2])
+    end
+
+    return unpack(results, 2)
+end
+
 describe('statuesque render spec', function()
     it('normalizes nested strings and segment children', function()
         local normalized = statuesque.normalize({
@@ -170,6 +200,62 @@ describe('statuesque render spec', function()
         assert_equal(statuesque.render({ cached_separator }, 'incline', { side = 'right' })[1][1], '  ')
     end)
 
+    it('keeps cached winbar fragments separate per window and buffer', function()
+        local calls = 0
+        local cached = {
+            id = 'cached-window-context',
+            cache = { key = 'cached-window-context' },
+            render = function(context)
+                calls = calls + 1
+                return ('%s:%s'):format(context.winid, context.bufnr)
+            end,
+        }
+
+        assert_equal(statuesque.render({ cached }, 'winbar', { winid = 101, bufnr = 201 }), '101:201')
+        assert_equal(statuesque.render({ cached }, 'winbar', { winid = 102, bufnr = 202 }), '102:202')
+        assert_equal(statuesque.render({ cached }, 'winbar', { winid = 101, bufnr = 201 }), '101:201')
+        assert_equal(calls, 2)
+
+        statuesque.invalidate('cached-window-context')
+        assert_equal(statuesque.render({ cached }, 'winbar', { winid = 101, bufnr = 201 }), '101:201')
+        assert_equal(calls, 3)
+    end)
+
+    it('keeps cached incline fragments separate per window and buffer', function()
+        local calls = 0
+        local cached = {
+            id = 'cached-incline-window-context',
+            cache = { key = 'cached-incline-window-context' },
+            render = function(context)
+                calls = calls + 1
+                return {
+                    text = ('%s:%s'):format(context.winid, context.bufnr),
+                }
+            end,
+        }
+
+        assert_equal(statuesque.render({ cached }, 'incline', { winid = 301, bufnr = 401 })[1][1], '301:401')
+        assert_equal(statuesque.render({ cached }, 'incline', { winid = 302, bufnr = 402 })[1][1], '302:402')
+        assert_equal(statuesque.render({ cached }, 'incline', { winid = 301, bufnr = 401 })[1][1], '301:401')
+        assert_equal(calls, 2)
+    end)
+
+    it('keeps cached statusline fragments global even when window context is provided', function()
+        local calls = 0
+        local cached = {
+            id = 'cached-statusline-global-context',
+            cache = { key = 'cached-statusline-global-context' },
+            render = function(context)
+                calls = calls + 1
+                return ('%s:%s'):format(context.winid, context.bufnr)
+            end,
+        }
+
+        assert_contains(statuesque.render({ cached }, 'statusline', { winid = 501, bufnr = 601 }), '501:601')
+        assert_contains(statuesque.render({ cached }, 'statusline', { winid = 502, bufnr = 602 }), '501:601')
+        assert_equal(calls, 1)
+    end)
+
     it('keeps cached separator render variants separate by backend defaults', function()
         local cached_separator = {
             id = 'cached-separator-defaults',
@@ -196,6 +282,70 @@ describe('statuesque render spec', function()
                 },
             }),
             'B'
+        )
+    end)
+
+    it('encodes custom separator defaults without variant key collisions', function()
+        local cached_separator = {
+            id = 'cached-separator-default-collisions',
+            cache = { key = 'cached-separator-default-collisions' },
+            render = function()
+                return { separator = 'section' }
+            end,
+        }
+
+        assert_equal(
+            statuesque.render({ cached_separator }, 'text', {
+                backend_defaults = {
+                    left_separator = 'a,b',
+                    right_separator = 'c',
+                    separator_padding = '',
+                },
+            }),
+            'a,b'
+        )
+        assert_equal(
+            statuesque.render({ cached_separator }, 'text', {
+                backend_defaults = {
+                    left_separator = 'a',
+                    right_separator = 'b,c',
+                    separator_padding = '',
+                },
+            }),
+            'a'
+        )
+    end)
+
+    it('keeps cached separator variants separate by backend default side', function()
+        local cached_separator = {
+            id = 'cached-separator-default-side',
+            cache = { key = 'cached-separator-default-side' },
+            render = function()
+                return { separator = 'section' }
+            end,
+        }
+
+        assert_equal(
+            statuesque.render({ cached_separator }, 'incline', {
+                backend_defaults = {
+                    side = 'left',
+                    left_separator = 'L',
+                    right_separator = 'R',
+                    separator_padding = '',
+                },
+            })[1][1],
+            'L'
+        )
+        assert_equal(
+            statuesque.render({ cached_separator }, 'incline', {
+                backend_defaults = {
+                    side = 'right',
+                    left_separator = 'L',
+                    right_separator = 'R',
+                    separator_padding = '',
+                },
+            })[1][1],
+            'R'
         )
     end)
 
@@ -303,6 +453,7 @@ describe('statuesque render spec', function()
                 { text = 'beta' },
             }, {
                 surface = 'statusline',
+                segment_layout = 'adjacent',
                 sigil = 'N',
                 mode_style = false,
                 outer = { fg = '#000000', bg = '#ffffff' },
@@ -328,6 +479,217 @@ describe('statuesque render spec', function()
         assert_equal(statuesque.render({ { separator = 'inner' } }, 'text'), '  ')
     end)
 
+    it('can compose gapped section islands against the base bar style', function()
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    { text = 'alpha' },
+                    { separator = 'inner' },
+                    { text = 'one' },
+                },
+                { text = 'beta' },
+            }, {
+                surface = 'statusline',
+                sigil = 'N',
+                mode_style = false,
+                base = { fg = '#eeeeee', bg = '#111111' },
+                outer = { fg = '#000000', bg = '#ffffff' },
+                inner = { fg = '#ffffff', bg = '#000000' },
+            }),
+            'debug'
+        )
+
+        assert_equal(debug[1].role, 'sigil')
+        assert_equal(debug[2].role, 'base-separator')
+        assert_gapped_trailing_separator(debug[2], '')
+        assert_equal(debug[2].children[2].hl.fg, '#ff9e64')
+        assert_equal(debug[2].children[2].hl.bg, '#111111')
+        assert_equal(debug[3].role, 'segment-leading-separator')
+        assert_gapped_leading_separator(debug[3], '')
+        assert_equal(debug[3].children[1].hl.fg, '#ffffff')
+        assert_equal(debug[3].children[1].hl.bg, '#111111')
+        assert_equal(debug[3].children[2].hl.bg, '#ffffff')
+        assert_equal(debug[4].children[1].text, 'alpha')
+        assert_equal(debug[4].children[2].separator, 'inner')
+        assert_equal(debug[5].role, 'segment-trailing-separator')
+        assert_gapped_trailing_separator(debug[5], '')
+        assert_equal(debug[5].children[1].hl.bg, '#ffffff')
+        assert_equal(debug[5].children[2].hl.fg, '#ffffff')
+        assert_equal(debug[5].children[2].hl.bg, '#111111')
+        assert_equal(debug[6].role, 'segment-leading-separator')
+        assert_gapped_leading_separator(debug[6], '')
+        assert_equal(debug[7].children[1].text, 'beta')
+        assert_equal(debug[8].role, 'segment-trailing-separator')
+        assert_equal(debug[9].role, 'right-edge-padding')
+        assert_equal(debug[9].hl.bg, '#111111')
+    end)
+
+    it('lets gapped section islands opt into gap padding separately', function()
+        local debug = statuesque.render(
+            statuesque.compose({
+                { text = 'alpha' },
+                { text = 'beta' },
+            }, {
+                surface = 'statusline',
+                gap_padding = ' ',
+                sigil = '',
+            }),
+            'debug'
+        )
+
+        assert_gapped_leading_separator(debug[1], '')
+        assert_equal(debug[4].role, 'segment-gap')
+        assert_equal(debug[4].text, ' ')
+        assert_equal(debug[4].hl.bg, '#1f2335')
+    end)
+
+    it('passes fully custom-rendered components without generated section chrome', function()
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    role = 'custom-tabs',
+                    custom_rendered = true,
+                    children = {
+                        { text = 'tab', hl = 'TabulatureActive1' },
+                    },
+                },
+            }, {
+                surface = 'tabline',
+                sigil = '𝄞',
+            }),
+            'debug'
+        )
+
+        assert_equal(#debug, 4)
+        assert_equal(debug[1].role, 'sigil')
+        assert_equal(debug[1].text, ' 𝄞')
+        assert_equal(debug[2].role, 'base-separator')
+        assert_gapped_trailing_separator(debug[2], '')
+        assert_equal(debug[3].role, 'custom-tabs')
+        assert_equal(debug[4].role, 'right-edge-padding')
+        assert_equal(statuesque.render(debug, 'text'), ' 𝄞 tab ')
+    end)
+
+    it('lets custom-rendered components suppress adjacent layout separators', function()
+        local debug = statuesque.render(
+            statuesque.compose({
+                { text = 'alpha' },
+                {
+                    role = 'custom-tabs',
+                    custom_rendered = true,
+                    children = {
+                        { text = 'beta' },
+                    },
+                },
+            }, {
+                surface = 'statusline',
+                segment_layout = 'adjacent',
+                sigil = '',
+            }),
+            'debug'
+        )
+
+        assert_equal(debug[1].children[1].text, 'alpha')
+        assert_equal(debug[2].role, 'custom-tabs')
+        assert_equal(statuesque.render(debug, 'text'), 'alphabeta ')
+    end)
+
+    it('preserves the custom-rendered marker on single normalized nodes', function()
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    custom_rendered = true,
+                    children = {
+                        { text = 'alpha' },
+                    },
+                },
+            }, {
+                surface = 'statusline',
+                segment_layout = 'adjacent',
+                sigil = '',
+            }),
+            'debug'
+        )
+
+        assert_equal(#debug, 2)
+        assert_equal(debug[1].custom_rendered, true)
+        assert_equal(debug[1].children[1].text, 'alpha')
+        assert_equal(debug[2].role, 'right-edge-padding')
+    end)
+
+    it('does not emit gapped section separators across custom-rendered component boundaries', function()
+        local rendered = statuesque.render(
+            statuesque.compose({
+                { text = 'alpha' },
+                {
+                    role = 'custom-tabs',
+                    custom_rendered = true,
+                    children = {
+                        { text = 'beta' },
+                    },
+                },
+                { text = 'gamma' },
+            }, {
+                surface = 'tabline',
+                sigil = '',
+            }),
+            'text'
+        )
+
+        assert_contains(rendered, 'alpha beta')
+        assert_contains(rendered, 'betagamma')
+        assert(not rendered:find('beta ', 1, true), rendered)
+    end)
+
+    it('mirrors gapped section islands on the right side', function()
+        local debug = statuesque.render(
+            statuesque.compose({
+                right = {
+                    { text = 'omega' },
+                    { text = 'tail' },
+                },
+            }, {
+                surface = 'statusline',
+                sigil = '',
+                mode_style = false,
+                base = { fg = '#eeeeee', bg = '#111111' },
+                outer = { fg = '#000000', bg = '#ffffff' },
+                inner = { fg = '#ffffff', bg = '#000000' },
+            }),
+            'debug'
+        )
+
+        assert_equal(debug[1].align, 'right')
+        assert_equal(debug[2].role, 'segment-leading-separator')
+        assert_gapped_leading_separator(debug[2], '')
+        assert_equal(debug[3].children[1].text, 'omega')
+        assert_equal(debug[4].role, 'segment-trailing-separator')
+        assert_gapped_trailing_separator(debug[4], '')
+        assert_equal(debug[5].role, 'segment-leading-separator')
+        assert_gapped_leading_separator(debug[5], '')
+        assert_equal(debug[6].children[1].text, 'tail')
+        assert_equal(debug[7].role, 'right-edge-padding')
+        assert_equal(debug[7].hl.bg, '#ffffff')
+    end)
+
+    it('uses diagonal reverse separators for gapped tabline segment entry', function()
+        local debug = statuesque.render(
+            statuesque.compose({
+                { text = 'alpha' },
+            }, {
+                surface = 'tabline',
+                sigil = '',
+            }),
+            'debug'
+        )
+
+        assert_equal(debug[1].role, 'segment-leading-separator')
+        assert_gapped_leading_separator(debug[1], '')
+        assert_equal(debug[2].children[1].text, 'alpha')
+        assert_equal(debug[3].role, 'segment-trailing-separator')
+        assert_gapped_trailing_separator(debug[3], '')
+    end)
+
     it('keeps interpolated section text readable on low-contrast palettes', function()
         local debug = statuesque.render(
             statuesque.compose({
@@ -336,6 +698,7 @@ describe('statuesque render spec', function()
                 { text = 'gamma' },
             }, {
                 surface = 'statusline',
+                segment_layout = 'adjacent',
                 sigil = '',
                 mode_style = false,
                 outer = { fg = '#777777', bg = '#777777' },
@@ -359,6 +722,7 @@ describe('statuesque render spec', function()
                 { text = 'beta' },
             }, {
                 surface = 'statusline',
+                segment_layout = 'adjacent',
                 sigil = '',
                 mode_style = false,
                 inner_mix = 1,
@@ -486,6 +850,7 @@ describe('statuesque render spec', function()
                 },
             }, {
                 surface = 'statusline',
+                segment_layout = 'adjacent',
                 sigil = '',
                 mode_style = false,
                 outer = { fg = '#000000', bg = '#ffffff' },
@@ -527,6 +892,7 @@ describe('statuesque render spec', function()
                 },
             }, {
                 surface = 'tabline',
+                segment_layout = 'adjacent',
                 sigil = '',
             }),
             'debug'
@@ -549,6 +915,7 @@ describe('statuesque render spec', function()
                 end,
             }, {
                 surface = 'statusline',
+                segment_layout = 'adjacent',
                 sigil = '',
             }),
             'statusline'
@@ -564,6 +931,7 @@ describe('statuesque render spec', function()
                 },
             }, {
                 surface = 'statusline',
+                segment_layout = 'adjacent',
                 sigil = '',
             }),
             'statusline'
@@ -590,6 +958,7 @@ describe('statuesque render spec', function()
                 },
             }, {
                 surface = 'statusline',
+                segment_layout = 'adjacent',
                 sigil = '',
             }),
             'statusline'
@@ -612,6 +981,7 @@ describe('statuesque render spec', function()
                 { text = 'alpha' },
             }, {
                 surface = 'statusline',
+                segment_layout = 'adjacent',
                 sigil = '',
             }),
             'statusline'
@@ -765,17 +1135,31 @@ describe('statuesque render spec', function()
 
         assert_equal(
             statuesque.surface_expression('status', 'statusline'),
-            '%!v:lua.require\'statuesque\'.render_surface("status", "statusline")'
+            '%!v:lua.require\'statuesque\'.render_installed_surface("status", "statusline")'
         )
 
         statuesque.install_surface('status', 'statusline')
 
         assert_equal(vim.o.laststatus, 3)
-        assert_equal(vim.o.statusline, '%!v:lua.require\'statuesque\'.render_surface("status", "statusline")')
+        assert_equal(vim.o.statusline, '%!v:lua.require\'statuesque\'.render_installed_surface("status", "statusline")')
 
         vim.o.laststatus = 2
         statuesque.install_surface('status', 'statusline')
         assert_equal(vim.o.laststatus, 3)
+    end)
+
+    it('renders installed winbars with Neovim window and buffer context', function()
+        local winid = vim.api.nvim_get_current_win()
+        local bufnr = vim.api.nvim_get_current_buf()
+        local previous_statusline_winid = vim.g.statusline_winid
+        vim.g.statusline_winid = winid
+
+        statuesque.set_surface('context-winbar', function(context)
+            return ('%s:%s'):format(context.winid, context.bufnr)
+        end)
+
+        assert_equal(statuesque.render_installed_surface('context-winbar', 'winbar'), ('%s:%s'):format(winid, bufnr))
+        vim.g.statusline_winid = previous_statusline_winid
     end)
 
     it('routes custom render targets through the backend registry', function()
@@ -788,6 +1172,108 @@ describe('statuesque render spec', function()
         assert_equal(statuesque.render({ 'ok' }, 'demo-backend'), 'demo:ok')
     end)
 
+    it('loads custom backend modules from runtimepath-style lua paths', function()
+        local backend = require('statuesque.backend')
+        backend._registered.runtime_fixture = nil
+        package.loaded['statuesque.backend.runtime_fixture'] = nil
+
+        with_runtimepath('tests/fixtures/runtime-backend', function()
+            assert_equal(statuesque.render({ 'ok' }, 'runtime_fixture'), 'runtime-fixture:ok')
+
+            local capabilities = statuesque.backend_capabilities('runtime_fixture')
+            assert_equal(capabilities.target, 'runtime_fixture')
+            assert_equal(capabilities.fixture, true)
+            assert_equal(capabilities.raw, true)
+            assert_equal(capabilities.install, false)
+        end)
+
+        backend._registered.runtime_fixture = nil
+        package.loaded['statuesque.backend.runtime_fixture'] = nil
+    end)
+
+    it('exposes built-in backend capabilities', function()
+        local debug = statuesque.backend_capabilities('debug')
+        local vim_target = statuesque.backend_capabilities('vim')
+        local statusline = statuesque.backend_capabilities('statusline')
+        local tabline = statuesque.backend_capabilities('tabline')
+        local winbar = statuesque.backend_capabilities('winbar')
+        local text = statuesque.backend_capabilities('text')
+        local incline = statuesque.backend_capabilities('incline')
+
+        assert_equal(debug.target, 'debug')
+        assert_equal(debug.snapshot, true)
+        assert_equal(debug.highlights, 'preserved')
+        assert_equal(vim_target.target, 'vim')
+        assert_equal(vim_target.highlights, true)
+        assert_equal(vim_target.clicks, true)
+        assert_equal(statusline.target, 'statusline')
+        assert_equal(statusline.highlights, true)
+        assert_equal(statusline.clicks, true)
+        assert_equal(statusline.align, true)
+        assert_equal(statusline.install, true)
+        assert_equal(statusline.global_statusline, true)
+        assert_equal(statusline.render_scope, 'global')
+        assert_equal(tabline.target, 'tabline')
+        assert_equal(tabline.install, true)
+        assert_equal(tabline.render_scope, 'global')
+        assert_equal(winbar.target, 'winbar')
+        assert_equal(winbar.install, true)
+        assert_equal(winbar.render_scope, 'window')
+        assert_equal(winbar.window_context, true)
+        assert_equal(winbar.buffer_context, true)
+        assert_equal(text.highlights, false)
+        assert_equal(text.clicks, false)
+        assert_equal(text.render_scope, 'global')
+        assert_equal(incline.render_scope, 'window')
+        assert_equal(incline.window_context, true)
+        assert_equal(incline.buffer_context, true)
+        assert_equal(incline.highlights, 'groups')
+        assert_equal(incline.clicks, false)
+        assert_equal(incline.click_degradation, 'metadata')
+    end)
+
+    it('preserves custom backend capabilities', function()
+        statuesque.register_backend('capability-demo', {
+            capabilities = {
+                highlights = true,
+                clicks = false,
+                custom_surface = true,
+            },
+            render = function(render_spec)
+                return statuesque.render(render_spec, 'text')
+            end,
+        })
+
+        local capabilities = statuesque.backend_capabilities('capability-demo')
+
+        assert_equal(capabilities.target, 'capability-demo')
+        assert_equal(capabilities.highlights, true)
+        assert_equal(capabilities.clicks, false)
+        assert_equal(capabilities.custom_surface, true)
+    end)
+
+    it('makes text target degradation match its declared capabilities', function()
+        local capabilities = statuesque.backend_capabilities('text')
+        local clicked = false
+        local rendered = statuesque.render({
+            {
+                text = 'left',
+                hl = 'StatuesqueModeNormal',
+                on_click = function()
+                    clicked = true
+                end,
+            },
+            { align = 'right' },
+            { text = 'right' },
+        }, 'text')
+
+        assert_equal(capabilities.highlights, false)
+        assert_equal(capabilities.clicks, false)
+        assert_equal(capabilities.align, false)
+        assert_equal(rendered, 'leftright')
+        assert_equal(clicked, false)
+    end)
+
     it('installs the default preset on demand without manifold wiring', function()
         statuesque.setup({
             manifold = false,
@@ -797,40 +1283,47 @@ describe('statuesque render spec', function()
         })
 
         assert_equal(vim.o.laststatus, 3)
-        assert_equal(vim.o.statusline, '%!v:lua.require\'statuesque\'.render_surface("statusline", "statusline")')
-        assert_equal(vim.o.tabline, '%!v:lua.require\'statuesque\'.render_surface("tabline", "tabline")')
-        assert_equal(vim.o.winbar, '%!v:lua.require\'statuesque\'.render_surface("winbar", "winbar")')
+        assert_equal(
+            vim.o.statusline,
+            '%!v:lua.require\'statuesque\'.render_installed_surface("statusline", "statusline")'
+        )
+        assert_equal(vim.o.tabline, '%!v:lua.require\'statuesque\'.render_installed_surface("tabline", "tabline")')
+        assert_equal(vim.o.winbar, '%!v:lua.require\'statuesque\'.render_installed_surface("winbar", "winbar")')
         assert(statuesque.render_surface('statusline', 'text'):find('S', 1, true))
     end)
 
-    it('uses Tabulature render specs in the default tabline when available', function()
+    it('uses real Tabulature state render specs in the default tabline when available', function()
         package.loaded['tabulature'] = nil
+        package.loaded['tabulature.state'] = nil
         package.loaded['tabulature.render.statuesque'] = nil
         local previous_tabulature = package.preload['tabulature']
+        local previous_state = package.preload['tabulature.state']
         local previous_renderer = package.preload['tabulature.render.statuesque']
         package.preload['tabulature'] = function()
+            return {}
+        end
+        package.preload['tabulature.state'] = function()
             return {
-                api = {
-                    tree = function()
-                        return {
-                            kind = 'workspace',
-                            children = {
-                                {
-                                    id = 'alpha',
-                                    kind = 'tab',
-                                    label = 'Alpha',
-                                    active = true,
-                                    children = {},
-                                },
+                to_tree = function()
+                    return {
+                        kind = 'workspace',
+                        children = {
+                            {
+                                id = 'alpha',
+                                kind = 'tab',
+                                label = 'Alpha',
+                                active = true,
+                                children = {},
                             },
-                        }
-                    end,
-                },
+                        },
+                    }
+                end,
             }
         end
         package.preload['tabulature.render.statuesque'] = function()
             return {
-                to_spec = function()
+                to_spec = function(root)
+                    assert_equal(root.children[1].label, 'Alpha')
                     return {
                         {
                             text = 'Alpha',
@@ -845,8 +1338,10 @@ describe('statuesque render spec', function()
         local rendered = statuesque.render(surfaces.tabline, 'text')
 
         package.loaded['tabulature'] = nil
+        package.loaded['tabulature.state'] = nil
         package.loaded['tabulature.render.statuesque'] = nil
         package.preload['tabulature'] = previous_tabulature
+        package.preload['tabulature.state'] = previous_state
         package.preload['tabulature.render.statuesque'] = previous_renderer
 
         assert(rendered:find('𝄞', 1, true), rendered)
@@ -875,9 +1370,30 @@ describe('statuesque render spec', function()
         assert(winbar:find('[No Name]', 1, true), winbar)
     end)
 
+    it('uses gapped segment layout in the default preset', function()
+        local surfaces = require('statuesque.presets.default').surfaces({
+            tabulature = false,
+            gap_padding = '',
+            status_sigil = '',
+            tabline_sigil = '',
+            winbar_sigil = '',
+        })
+
+        local statusline = statuesque.render(surfaces.statusline, 'debug', { mode = 'normal' })
+        local tabline = statuesque.render(surfaces.tabline, 'debug')
+
+        assert_equal(statusline[1].role, 'segment-leading-separator')
+        assert_gapped_leading_separator(statusline[1], '')
+        assert_equal(tabline[1].role, 'segment-leading-separator')
+        assert_gapped_leading_separator(tabline[1], '')
+    end)
+
     it('fails explicitly for unsupported render and install targets', function()
         local render_ok, render_err = pcall(function()
             statuesque.render({ 'ready' }, 'floating-widget')
+        end)
+        local capability_ok, capability_err = pcall(function()
+            statuesque.backend_capabilities('floating-widget')
         end)
         local install_ok, install_err = pcall(function()
             statuesque.install_surface('status', 'floating-widget')
@@ -885,6 +1401,8 @@ describe('statuesque render spec', function()
 
         assert(not render_ok)
         assert(tostring(render_err):find('unsupported statuesque render target: floating-widget', 1, true))
+        assert(not capability_ok)
+        assert(tostring(capability_err):find('unsupported statuesque render target: floating-widget', 1, true))
         assert(not install_ok)
         assert(tostring(install_err):find('unsupported install target: floating-widget', 1, true))
     end)
@@ -902,5 +1420,21 @@ describe('statuesque render spec', function()
 
         assert(not ok)
         assert(tostring(err):find('backend load exploded', 1, true))
+    end)
+
+    it('fails explicitly when a runtimepath backend module violates the backend contract', function()
+        package.loaded['statuesque.backend.malformed_fixture'] = nil
+
+        local ok, err = with_runtimepath('tests/fixtures/runtime-backend', function()
+            return pcall(function()
+                statuesque.render({ 'ready' }, 'malformed_fixture')
+            end)
+        end)
+
+        package.loaded['statuesque.backend.malformed_fixture'] = nil
+
+        assert(not ok)
+        assert(tostring(err):find('invalid statuesque backend "malformed_fixture"', 1, true))
+        assert(tostring(err):find('expected table with render(spec, opts)', 1, true))
     end)
 end)

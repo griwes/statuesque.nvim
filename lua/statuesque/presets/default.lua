@@ -3,11 +3,29 @@ local widgets = require('statuesque.widgets')
 
 local M = {}
 
+--- @return boolean
 local function has_tabulature()
     local ok = pcall(require, 'tabulature')
     return ok
 end
 
+--- @param opts statuesque.PresetOptions
+--- @param surface statuesque.Surface
+--- @param sigil? string|false
+--- @return statuesque.ComposeOptions
+local function compose_opts(opts, surface, sigil)
+    return {
+        surface = surface,
+        sigil = sigil,
+        segment_layout = opts.segment_layout,
+        gap_padding = opts.gap_padding,
+        layout = opts.layout,
+    }
+end
+
+--- Build the default preset surfaces without installing them.
+--- @param opts? statuesque.PresetOptions
+--- @return table<string, statuesque.RenderNode>
 function M.surfaces(opts)
     opts = opts or {}
     local tabulature_enabled = opts.tabulature == true or (opts.tabulature == nil and has_tabulature())
@@ -30,16 +48,10 @@ function M.surfaces(opts)
                 widgets.location(),
                 widgets.progress(),
             },
-        }, {
-            surface = 'statusline',
-            sigil = opts.status_sigil,
-        }),
+        }, compose_opts(opts, 'statusline', opts.status_sigil)),
         winbar = style.compose({
             widgets.filename({ path = ':~:.', max_width = 80 }),
-        }, {
-            surface = 'winbar',
-            sigil = opts.winbar_sigil,
-        }),
+        }, compose_opts(opts, 'winbar', opts.winbar_sigil)),
     }
 
     if tabulature_enabled then
@@ -50,22 +62,19 @@ function M.surfaces(opts)
             right = {
                 widgets.cwd({ max_width = opts.tabline_cwd_max_width or 48 }),
             },
-        }, {
-            surface = 'tabline',
-            sigil = tabline_sigil or opts.tabline_sigil,
-        })
+        }, compose_opts(opts, 'tabline', tabline_sigil or opts.tabline_sigil))
     else
         surfaces.tabline = style.compose({
             widgets.cwd({ max_width = opts.tabline_cwd_max_width or 48 }),
-        }, {
-            surface = 'tabline',
-            sigil = opts.tabline_sigil,
-        })
+        }, compose_opts(opts, 'tabline', opts.tabline_sigil))
     end
 
     return surfaces
 end
 
+--- Install the default preset surfaces into Neovim statusline-family options.
+--- @param opts? statuesque.PresetOptions
+--- @return table<string, statuesque.RenderNode>
 function M.install(opts)
     local statuesque = require('statuesque')
     local surfaces = M.surfaces(opts)

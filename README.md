@@ -51,6 +51,33 @@ Publisher components are tables that advertise `statuesque_component = true`
 and provide `render(context)` plus optional `subscribe(self, notify)`.
 `notify()` invalidates the component cache and schedules a status redraw.
 
+## Publication Policy
+
+`statusline` is the only surface that auto-publishes to detected external
+consumers by default. `tabline`, `winbar`, and custom surfaces require explicit
+publication unless opted in:
+
+```lua
+require('statuesque').setup({
+    publish = {
+        auto = {
+            statusline = true,
+            tabline = true,
+        },
+    },
+})
+```
+
+Manual publication is always available:
+
+```lua
+require('statuesque').publish('tabline')
+```
+
+The current external consumer is Manifold child status/surface export. Statuesque
+still only publishes render specs; it does not own the underlying editor,
+Tabulature, or Manifold state.
+
 ## Presets
 
 ```lua
@@ -69,6 +96,13 @@ tabulature bridge.
 `statuesque.compose()` accepts either a simple component list or explicit
 `{ left = {...}, right = {...} }` sections. Right sections are separated with
 right-oriented glyphs and emit a leading right boundary separator by default.
+By default, top-level sections render as gapped islands against the backend base
+style: each segment enters from base with the reverse block separator, exits
+back to base with the normal block separator, and keeps `separator = 'inner'`
+for within-segment separation. Gapped section boundaries keep ordinary
+`separator_padding` on the segment-colored side. Adjacent islands are separated
+by `gap_padding`, which defaults to `''`. Set `segment_layout = 'adjacent'` to
+use the older directly-adjacent section rendering.
 Interpolated section styles enforce readable foreground/background contrast;
 set `min_contrast` on the compose options to tune the threshold. When a
 generated foreground is unreadable, Statuesque first tries softer dark/light
@@ -119,10 +153,45 @@ statuesque.set_surface('tabline', 'domains')
 statuesque.install_surface('tabline', 'tabline')
 
 statuesque.register_backend('custom', {
+    capabilities = {
+        highlights = false,
+        clicks = false,
+        align = false,
+        raw = false,
+        install = false,
+    },
     render = function(render_spec, opts)
         return statuesque.render(render_spec, 'text', opts)
     end,
 })
+
+local capabilities = statuesque.backend_capabilities('statusline')
+```
+
+Custom backends can also be shipped as runtimepath modules. Put a module at
+`lua/statuesque/backend/<name>.lua` and return a table with
+`render(render_spec, opts)` plus optional `capabilities`:
+
+```lua
+-- lua/statuesque/backend/my_surface.lua
+return {
+    capabilities = {
+        highlights = false,
+        clicks = false,
+        align = false,
+        raw = true,
+        install = false,
+    },
+    render = function(render_spec, opts)
+        return require('statuesque').render(render_spec, 'text', opts)
+    end,
+}
+```
+
+Then target it by name:
+
+```lua
+local rendered = require('statuesque').render(spec, 'my_surface')
 ```
 
 ## Targets
@@ -139,5 +208,13 @@ Click handlers in Vim statusline-family targets are routed through
 the caller, while function handlers are invoked directly.
 
 `install_surface(surface, target)` installs a configured provider onto
-`statusline`, `tabline`, or `winbar`. Statusline installs default to Neovim's
-global statusline mode (`laststatus=3`) unless `globalstatus=false` is passed.
+`statusline`, `tabline`, or `winbar`. Statusline installs always use Neovim's
+global statusline mode (`laststatus=3`).
+
+Backends can advertise `capabilities` with fields such as `highlights`,
+`clicks`, `align`, `raw`, and `install`. Built-in backends expose capabilities
+through `backend_capabilities(target)`. Unsupported target behavior should
+degrade explicitly; for example, the Incline backend marks unsupported click
+handlers as `statuesque.on_click = 'unsupported'` metadata instead of pretending
+clicks work. The `text` backend drops highlight, click, and alignment semantics
+while preserving textual content and raw text.

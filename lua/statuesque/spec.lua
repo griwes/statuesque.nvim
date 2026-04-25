@@ -20,6 +20,7 @@ local KNOWN_FIELDS = {
     'cache',
     'separator',
     'separator_side',
+    'custom_rendered',
     '_statuesque_cache_key',
 }
 
@@ -35,12 +36,16 @@ local TRUNCATE_MODES = {
     hide = true,
 }
 
+--- @param target table[]
+--- @param source table[]
 local function append_all(target, source)
     for _, item in ipairs(source) do
         target[#target + 1] = item
     end
 end
 
+--- @param value table
+--- @return boolean
 local function has_known_field(value)
     for key in pairs(value) do
         if KNOWN_FIELD_SET[key] then
@@ -51,6 +56,9 @@ local function has_known_field(value)
     return false
 end
 
+--- @generic T
+--- @param value T
+--- @return T
 local function copy_table(value)
     if type(value) ~= 'table' then
         return value
@@ -63,6 +71,9 @@ local function copy_table(value)
     return copy
 end
 
+--- @param value table
+--- @param opts statuesque.RenderContext
+--- @return statuesque.NormalizedNode[]
 local function normalize_children(value, opts)
     local children = {}
 
@@ -83,6 +94,9 @@ local function normalize_children(value, opts)
     return children
 end
 
+--- @param value table
+--- @param opts statuesque.RenderContext
+--- @return statuesque.NormalizedNode[]
 local function normalize_segment(value, opts)
     local segment = {}
 
@@ -115,15 +129,23 @@ local function normalize_segment(value, opts)
     return { segment }
 end
 
+--- @param opts statuesque.RenderContext
+--- @return statuesque.RenderContext
 local function context_for(opts)
     return opts.context or opts
 end
 
+--- @param opts table
+--- @param suffix? string
+--- @return string
 local function fallback_key(opts, suffix)
     opts.__statuesque_dynamic_index = (opts.__statuesque_dynamic_index or 0) + 1
     return ('%s:%d'):format(suffix or 'dynamic', opts.__statuesque_dynamic_index)
 end
 
+--- @param parent table
+--- @param nodes statuesque.NormalizedNode[]
+--- @return statuesque.NormalizedNode[]
 local function inherit_fields(parent, nodes)
     if #nodes ~= 1 or type(nodes[1]) ~= 'table' then
         return nodes
@@ -141,9 +163,14 @@ local function inherit_fields(parent, nodes)
     return nodes
 end
 
+--- @param value statuesque.RenderFunction|statuesque.RenderNode|statuesque.PublisherComponent
+--- @param opts statuesque.RenderContext
+--- @param render fun(): statuesque.RenderSpec
+--- @return statuesque.NormalizedNode[]
 local function normalize_dynamic(value, opts, render)
-    local key = cache.key_for(value, type(value) == 'table' and value.id or fallback_key(opts, 'component'))
+    local key = cache.key_for(value, type(value) == 'table' and value.id or fallback_key(opts, 'component'), opts)
     if publisher.is_component(value) then
+        --- @cast value statuesque.PublisherComponent
         publisher.ensure_subscription(value, key, opts)
     end
 
@@ -171,9 +198,9 @@ local function normalize_dynamic(value, opts, render)
 end
 
 --- Normalize a recursive render specification into a canonical list of nodes.
---- @param render_spec any
---- @param opts? table
---- @return table[]
+--- @param render_spec statuesque.RenderSpec
+--- @param opts? statuesque.RenderContext
+--- @return statuesque.NormalizedNode[]
 function M.normalize(render_spec, opts)
     opts = opts or {}
 
@@ -201,12 +228,14 @@ function M.normalize(render_spec, opts)
     end
 
     if publisher.is_component(render_spec) then
+        --- @cast render_spec statuesque.PublisherComponent
         return normalize_dynamic(render_spec, opts, function()
             return publisher.render(render_spec, context_for(opts))
         end)
     end
 
     if type(render_spec.render) == 'function' then
+        --- @cast render_spec statuesque.RenderNode
         return normalize_dynamic(render_spec, opts, function()
             return render_spec.render(context_for(opts), render_spec)
         end)
@@ -222,6 +251,8 @@ function M.normalize(render_spec, opts)
     return normalize_segment(render_spec, opts)
 end
 
+--- @param value string
+--- @return integer
 local function strchars(value)
     if vim and vim.fn and vim.fn.strchars then
         return vim.fn.strchars(value)
@@ -230,6 +261,10 @@ local function strchars(value)
     return #value
 end
 
+--- @param value string
+--- @param start integer
+--- @param length integer
+--- @return string
 local function strcharpart(value, start, length)
     if vim and vim.fn and vim.fn.strcharpart then
         return vim.fn.strcharpart(value, start, length)
@@ -240,7 +275,7 @@ end
 
 --- Apply a node's truncation policy to already-rendered text.
 --- @param text string
---- @param node table
+--- @param node statuesque.NormalizedNode
 --- @return string
 function M.truncate_text(text, node)
     if node.max_width == nil then

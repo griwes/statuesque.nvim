@@ -6,6 +6,8 @@ local AUTO = {
     attempts = 0,
 }
 
+--- @param value any
+--- @return any
 local function plain_value(value)
     if type(value) == 'function' then
         return nil
@@ -26,7 +28,7 @@ local function plain_value(value)
 end
 
 --- Return Manifold child capability metadata for Statuesque.
---- @return table
+--- @return table<string, any>
 function M.capabilities()
     return {
         plugin = 'statuesque',
@@ -42,6 +44,7 @@ function M.capabilities()
     }
 end
 
+--- @return table?
 local function manifold_module()
     local ok, manifold = pcall(require, 'manifold')
     if ok and type(manifold) == 'table' then
@@ -50,10 +53,13 @@ local function manifold_module()
     return nil
 end
 
+--- @param manifold table?
+--- @return boolean
 local function is_manifold_host(manifold)
     return manifold ~= nil and type(manifold.is_host) == 'function' and manifold.is_host()
 end
 
+--- @return boolean
 local function has_child_attachment()
     local control = vim.g.manifold_child_control
     return type(control) == 'table' and type(control.attachments) == 'table' and next(control.attachments) ~= nil
@@ -61,8 +67,8 @@ end
 
 --- Export a configured Statuesque surface as plain data for a Manifold host.
 --- @param surface? string
---- @param opts? table
---- @return table
+--- @param opts? statuesque.RenderContext
+--- @return table<string, any>
 function M.status_snapshot(surface, opts)
     surface = surface or 'statusline'
     local statuesque = require('statuesque')
@@ -75,8 +81,8 @@ end
 
 --- Build a status update event for a Manifold host.
 --- @param surface? string
---- @param opts? table
---- @return table
+--- @param opts? statuesque.RenderContext
+--- @return table<string, any>
 function M.status_update(surface, opts)
     local snapshot = M.status_snapshot(surface, opts)
     return {
@@ -88,6 +94,8 @@ function M.status_update(surface, opts)
     }
 end
 
+--- @param event table<string, any>
+--- @return integer
 local function publish_event(event)
     local state = vim.g.manifold_child_control
     if state == nil or state.attachments == nil then
@@ -123,12 +131,13 @@ end
 
 --- Publish a status update to attached Manifold hosts.
 --- @param surface? string
---- @param opts? table
+--- @param opts? statuesque.RenderContext
 --- @return integer
 function M.publish_status(surface, opts)
     return publish_event(M.status_update(surface, opts))
 end
 
+--- @return string
 local function mode_name()
     local mode = vim.api.nvim_get_mode().mode
     if mode:sub(1, 1) == 'i' then
@@ -146,6 +155,7 @@ local function mode_name()
     return 'NORMAL'
 end
 
+--- @return string
 local function file_label()
     local name = vim.api.nvim_buf_get_name(0)
     if name == '' then
@@ -154,11 +164,13 @@ local function file_label()
     return vim.fn.fnamemodify(name, ':t')
 end
 
+--- @return string
 local function cursor_label()
     local cursor = vim.api.nvim_win_get_cursor(0)
     return string.format('%d:%d', cursor[1], cursor[2] + 1)
 end
 
+--- @return statuesque.RenderNode[]
 local function child_status_spec()
     return {
         {
@@ -187,7 +199,12 @@ local function child_status_spec()
     }
 end
 
+--- @param surface? string
+--- @return nil
 local function schedule_publish(surface)
+    if not require('statuesque').should_auto_publish(surface or 'statusline') then
+        return
+    end
     if M._pending_status_publish then
         return
     end
@@ -199,12 +216,16 @@ local function schedule_publish(surface)
 end
 
 --- Enable host-side Statuesque provider behavior inside a Manifold host.
---- @param opts? { surface?: string, install?: boolean }
+--- @param opts? statuesque.ManifoldHostOptions
 --- @return boolean
 function M.setup_host(opts)
     opts = opts or {}
     local manifold = manifold_module()
-    if not is_manifold_host(manifold) or type(manifold.install_statusline_provider) ~= 'function' then
+    if
+        manifold == nil
+        or not is_manifold_host(manifold)
+        or type(manifold.install_statusline_provider) ~= 'function'
+    then
         return false
     end
 
@@ -215,7 +236,8 @@ function M.setup_host(opts)
 end
 
 --- Enable child-side editor status export to an attached Manifold host.
---- @param opts? { surface?: string, suppress_local?: boolean }
+--- @param opts? statuesque.ManifoldChildOptions
+--- @return nil
 function M.setup_child(opts)
     opts = opts or {}
     local surface = opts.surface or 'statusline'
@@ -246,7 +268,8 @@ function M.setup_child(opts)
 end
 
 --- Detect Manifold host/child context and enable the matching integration.
---- @param opts? { host?: table|false, child?: table|false, max_attempts?: integer }
+--- @param opts? statuesque.ManifoldAutoOptions
+--- @return nil
 function M.auto_setup(opts)
     opts = opts or {}
     if opts.host ~= false and not AUTO.host_attached and M.setup_host(opts.host or {}) then

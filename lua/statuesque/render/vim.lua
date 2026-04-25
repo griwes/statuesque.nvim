@@ -1,26 +1,41 @@
 local cache = require('statuesque.cache')
 local clicks = require('statuesque.clicks')
+local context = require('statuesque.context')
 local spec = require('statuesque.spec')
 local style = require('statuesque.style')
 
 local M = {}
 
+--- @param text string
+--- @return string
 local function escape_text(text)
     local escaped = text:gsub('%%', '%%%%')
     return escaped
 end
 
+--- @param value any
+--- @return string
+local function encode_variant_value(value)
+    value = tostring(value or '')
+    return ('%d:%s'):format(#value, value)
+end
+
+--- @param ctx statuesque.RenderContext
+--- @return string
 local function defaults_variant(ctx)
     local defaults = ctx.backend_defaults or {}
     return table.concat({
-        defaults.left_separator or '',
-        defaults.right_separator or '',
-        defaults.inner_left_separator or '',
-        defaults.inner_right_separator or '',
-        defaults.separator_padding or '',
-    }, ',')
+        encode_variant_value(defaults.left_separator),
+        encode_variant_value(defaults.right_separator),
+        encode_variant_value(defaults.inner_left_separator),
+        encode_variant_value(defaults.inner_right_separator),
+        encode_variant_value(defaults.separator_padding),
+        encode_variant_value(defaults.side),
+    }, '|')
 end
 
+--- @param ctx statuesque.RenderContext
+--- @return string
 local function variant_key(ctx)
     return ('side=%s,separator_side=%s,inline=%s,inline_start=%d,defaults=%s'):format(
         ctx.side or '',
@@ -31,6 +46,9 @@ local function variant_key(ctx)
     )
 end
 
+--- @param ctx statuesque.RenderContext
+--- @param name string
+--- @param hl statuesque.HighlightSpec
 local function record_inline_highlight(ctx, name, hl)
     ctx.inline_highlight_definitions[#ctx.inline_highlight_definitions + 1] = {
         name = name,
@@ -38,6 +56,7 @@ local function record_inline_highlight(ctx, name, hl)
     }
 end
 
+--- @param record table
 local function apply_inline_highlights(record)
     if type(record.inline_highlight_definitions) ~= 'table' then
         return
@@ -48,6 +67,9 @@ local function apply_inline_highlights(record)
     end
 end
 
+--- @param hl? statuesque.Highlight
+--- @param ctx statuesque.RenderContext
+--- @return string?
 local function highlight_name(hl, ctx)
     if hl == nil then
         return nil
@@ -74,6 +96,9 @@ end
 
 local render_node
 
+--- @param node statuesque.NormalizedNode
+--- @param ctx statuesque.RenderContext
+--- @return string
 local function node_prefix(node, ctx)
     if node.text ~= nil then
         return escape_text(spec.truncate_text(node.text, node))
@@ -93,6 +118,9 @@ local function node_prefix(node, ctx)
     return ''
 end
 
+--- @param node statuesque.NormalizedNode
+--- @param ctx statuesque.RenderContext
+--- @return string
 local function render_node_uncached(node, ctx)
     local chunks = { node_prefix(node, ctx) }
 
@@ -123,9 +151,13 @@ local function render_node_uncached(node, ctx)
     return rendered
 end
 
+--- @param node statuesque.NormalizedNode
+--- @param ctx statuesque.RenderContext
+--- @return string
 function render_node(node, ctx)
     local inline_highlight_start = ctx.inline_highlight_index
     local inline_definition_start = #ctx.inline_highlight_definitions
+    --- @type { rendered: string, inline_highlight_count?: integer, inline_highlight_definitions?: { name: string, hl: statuesque.HighlightSpec }[] }
     local record = cache.get_rendered(ctx.target, node._statuesque_cache_key, variant_key(ctx), function()
         local rendered = render_node_uncached(node, ctx)
         local inline_highlight_count = ctx.inline_highlight_index - inline_highlight_start
@@ -143,7 +175,7 @@ function render_node(node, ctx)
     end)
 
     if type(record) ~= 'table' or record.rendered == nil then
-        return record
+        return tostring(record or '')
     end
 
     ctx.inline_highlight_index = inline_highlight_start + (record.inline_highlight_count or 0)
@@ -152,31 +184,21 @@ function render_node(node, ctx)
 end
 
 --- Render a spec into Vim statusline/tabline/winbar syntax.
---- @param render_spec any
---- @param opts? table
+--- @param render_spec statuesque.RenderSpec
+--- @param opts? statuesque.RenderContext
 --- @return string
 function M.render(render_spec, opts)
-    opts = opts or {}
-
-    local ctx = vim.tbl_extend('force', opts, {
-        target = opts.target or 'vim',
+    local ctx = vim.tbl_extend('force', context.with_target(opts, opts and opts.target or 'vim'), {
         inline_highlight_index = 0,
-        inline_highlight_prefix = opts.inline_highlight_prefix or 'StatuesqueInline',
+        inline_highlight_prefix = opts and opts.inline_highlight_prefix or 'StatuesqueInline',
         inline_highlight_definitions = {},
     })
 
-    local rendered_nodes = {}
-    for _, node in ipairs(spec.normalize(render_spec, opts)) do
-        rendered_nodes[#rendered_nodes + 1] = {
-            node = node,
-            rendered = render_node(node, ctx),
-        }
-    end
-
     local chunks = {}
-    for _, entry in ipairs(rendered_nodes) do
-        if entry.rendered ~= '' then
-            chunks[#chunks + 1] = entry.rendered
+    for _, node in ipairs(spec.normalize(render_spec, ctx)) do
+        local rendered = render_node(node, ctx)
+        if rendered ~= '' then
+            chunks[#chunks + 1] = rendered
         end
     end
 

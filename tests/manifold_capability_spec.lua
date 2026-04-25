@@ -4,6 +4,37 @@ local function assert_equal(actual, expected)
     assert(actual == expected, ('expected %q, got %q'):format(tostring(expected), tostring(actual)))
 end
 
+local function with_manifold_attachment(body)
+    local original_sockconnect = vim.fn.sockconnect
+    local original_rpcnotify = vim.fn.rpcnotify
+    local published = {}
+
+    vim.g.manifold_child_control = {
+        attachments = {
+            ['manifold:child:1'] = {
+                host_server = '/tmp/manifold.sock',
+            },
+        },
+    }
+    vim.fn.sockconnect = function()
+        return 42
+    end
+    vim.fn.rpcnotify = function(_, _, _, args)
+        published[#published + 1] = args[2]
+        return true
+    end
+
+    local ok, err = pcall(body, published)
+
+    vim.fn.sockconnect = original_sockconnect
+    vim.fn.rpcnotify = original_rpcnotify
+    vim.g.manifold_child_control = nil
+
+    if not ok then
+        error(err, 0)
+    end
+end
+
 describe('statuesque manifold capability', function()
     it('exposes a versioned Manifold capability record', function()
         local capabilities = manifold.capabilities()
@@ -94,88 +125,153 @@ describe('statuesque manifold capability', function()
 
     it('automatically publishes statusline surface changes when attached to Manifold', function()
         local statuesque = require('statuesque')
-        local original_sockconnect = vim.fn.sockconnect
-        local original_rpcnotify = vim.fn.rpcnotify
-        local published = {}
-
-        vim.g.manifold_child_control = {
-            attachments = {
-                ['manifold:child:1'] = {
-                    host_server = '/tmp/manifold.sock',
+        with_manifold_attachment(function(published)
+            statuesque.set_surface('statusline', {
+                {
+                    text = 'auto status',
+                    role = 'status',
                 },
-            },
-        }
-        vim.fn.sockconnect = function()
-            return 42
-        end
-        vim.fn.rpcnotify = function(_, _, _, args)
-            published[#published + 1] = args[2]
-            return true
-        end
+            })
 
-        statuesque.set_surface('statusline', {
-            {
-                text = 'auto status',
-                role = 'status',
-            },
-        })
+            local did_publish = vim.wait(1000, function()
+                return #published >= 1
+            end, 10)
 
-        local did_publish = vim.wait(1000, function()
-            return #published >= 1
-        end, 10)
+            assert(did_publish)
+            assert_equal(published[1].kind, 'statuesque.status_update')
+            assert_equal(published[1].spec[1].text, 'auto status')
+        end)
+    end)
 
-        vim.fn.sockconnect = original_sockconnect
-        vim.fn.rpcnotify = original_rpcnotify
-        vim.g.manifold_child_control = nil
+    it('does not automatically publish non-statusline surfaces by default', function()
+        local statuesque = require('statuesque')
+        with_manifold_attachment(function(published)
+            require('statuesque.config').configure({})
 
-        assert(did_publish)
-        assert_equal(published[1].kind, 'statuesque.status_update')
-        assert_equal(published[1].spec[1].text, 'auto status')
+            statuesque.set_surface('tabline', {
+                {
+                    text = 'quiet tabline',
+                },
+            })
+
+            vim.wait(100, function()
+                return #published > 0
+            end, 10)
+
+            assert_equal(#published, 0)
+        end)
+    end)
+
+    it('does not auto-publish winbar by default', function()
+        local statuesque = require('statuesque')
+        with_manifold_attachment(function(published)
+            require('statuesque.config').configure({})
+
+            statuesque.set_surface('winbar', {
+                {
+                    text = 'quiet winbar',
+                },
+            })
+
+            vim.wait(100, function()
+                return #published > 0
+            end, 10)
+
+            assert_equal(#published, 0)
+        end)
+    end)
+
+    it('respects publication policy for Manifold child non-statusline surfaces', function()
+        local statuesque = require('statuesque')
+        with_manifold_attachment(function(published)
+            require('statuesque.config').configure({})
+
+            manifold.setup_child({
+                surface = 'tabline',
+                suppress_local = false,
+            })
+
+            vim.wait(100, function()
+                return #published > 0
+            end, 10)
+
+            assert_equal(#published, 0)
+            assert_equal(statuesque.resolve_surface('tabline')[1].role, 'child-editor-status')
+        end)
+    end)
+
+    it('can opt non-statusline surfaces into automatic publication', function()
+        local statuesque = require('statuesque')
+        with_manifold_attachment(function(published)
+            require('statuesque.config').configure({
+                publish = {
+                    auto = {
+                        statusline = true,
+                        tabline = true,
+                    },
+                },
+            })
+
+            statuesque.set_surface('tabline', {
+                {
+                    text = 'auto tabline',
+                },
+            })
+
+            local did_publish = vim.wait(1000, function()
+                return #published >= 1
+            end, 10)
+
+            require('statuesque.config').configure({})
+
+            assert(did_publish)
+            assert_equal(published[1].surface, 'tabline')
+            assert_equal(published[1].spec[1].text, 'auto tabline')
+        end)
+    end)
+
+    it('explicitly publishes non-statusline surfaces on request', function()
+        local statuesque = require('statuesque')
+        with_manifold_attachment(function(published)
+            require('statuesque.config').configure({})
+            statuesque.set_surface('winbar', {
+                {
+                    text = 'manual winbar',
+                },
+            })
+
+            local count = statuesque.publish('winbar')
+
+            require('statuesque.config').configure({})
+
+            assert_equal(count, 1)
+            assert_equal(published[1].surface, 'winbar')
+            assert_equal(published[1].spec[1].text, 'manual winbar')
+        end)
     end)
 
     it('coalesces rapid automatic statusline publishes to the final surface value', function()
         local statuesque = require('statuesque')
-        local original_sockconnect = vim.fn.sockconnect
-        local original_rpcnotify = vim.fn.rpcnotify
-        local published = {}
-
-        vim.g.manifold_child_control = {
-            attachments = {
-                ['manifold:child:1'] = {
-                    host_server = '/tmp/manifold.sock',
+        with_manifold_attachment(function(published)
+            statuesque.set_surface('statusline', {
+                {
+                    text = 'first',
                 },
-            },
-        }
-        vim.fn.sockconnect = function()
-            return 42
-        end
-        vim.fn.rpcnotify = function(_, _, _, args)
-            published[#published + 1] = args[2]
-            return true
-        end
+            })
+            statuesque.set_surface('statusline', {
+                {
+                    text = 'second',
+                },
+            })
 
-        statuesque.set_surface('statusline', {
-            {
-                text = 'first',
-            },
-        })
-        statuesque.set_surface('statusline', {
-            {
-                text = 'second',
-            },
-        })
+            local did_publish = vim.wait(1000, function()
+                return #published >= 1
+            end, 10)
 
-        local did_publish = vim.wait(1000, function()
-            return #published >= 1
-        end, 10)
-
-        vim.fn.sockconnect = original_sockconnect
-        vim.fn.rpcnotify = original_rpcnotify
-        vim.g.manifold_child_control = nil
-
-        assert(did_publish)
-        assert_equal(#published, 1)
-        assert_equal(published[1].spec[1].text, 'second')
+            assert(did_publish)
+            assert_equal(#published, 1)
+            assert_equal(published[1].spec[1].text, 'second')
+        end)
     end)
 
     it('auto-detects a Manifold host and installs the host status provider from normal setup', function()
@@ -200,39 +296,18 @@ describe('statuesque manifold capability', function()
 
     it('auto-detects a Manifold child attachment and exports nested editor status without local statusline', function()
         local statuesque = require('statuesque')
-        local original_sockconnect = vim.fn.sockconnect
-        local original_rpcnotify = vim.fn.rpcnotify
-        local published = {}
+        with_manifold_attachment(function(published)
+            statuesque.setup({})
 
-        vim.g.manifold_child_control = {
-            attachments = {
-                ['manifold:child:1'] = {
-                    host_server = '/tmp/manifold.sock',
-                },
-            },
-        }
-        vim.fn.sockconnect = function()
-            return 42
-        end
-        vim.fn.rpcnotify = function(_, _, _, args)
-            published[#published + 1] = args[2]
-            return true
-        end
+            local did_publish = vim.wait(1000, function()
+                return #published >= 1
+            end, 10)
 
-        statuesque.setup({})
-
-        local did_publish = vim.wait(1000, function()
-            return #published >= 1
-        end, 10)
-
-        vim.fn.sockconnect = original_sockconnect
-        vim.fn.rpcnotify = original_rpcnotify
-        vim.g.manifold_child_control = nil
-
-        assert(did_publish)
-        assert_equal(published[1].kind, 'statuesque.status_update')
-        assert_equal(published[1].spec[1].role, 'child-editor-status')
-        assert_equal(published[1].spec[1].children[1].role, 'mode')
-        assert_equal(vim.o.laststatus, 0)
+            assert(did_publish)
+            assert_equal(published[1].kind, 'statuesque.status_update')
+            assert_equal(published[1].spec[1].role, 'child-editor-status')
+            assert_equal(published[1].spec[1].children[1].role, 'mode')
+            assert_equal(vim.o.laststatus, 0)
+        end)
     end)
 end)

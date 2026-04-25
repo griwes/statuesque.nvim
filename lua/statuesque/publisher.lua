@@ -6,6 +6,7 @@ local M = {
     }),
 }
 
+--- @return nil
 local function schedule_redraw()
     if vim == nil or vim.schedule == nil then
         return
@@ -16,6 +17,8 @@ local function schedule_redraw()
     end)
 end
 
+--- @param value any
+--- @return boolean
 function M.is_component(value)
     if type(value) ~= 'table' then
         return false
@@ -26,6 +29,9 @@ function M.is_component(value)
         or type(value.capabilities) == 'table'
 end
 
+--- @param component statuesque.PublisherComponent
+--- @param context? statuesque.RenderContext
+--- @return statuesque.RenderSpec
 function M.render(component, context)
     if type(component.statuesque_render) == 'function' then
         return component:statuesque_render(context)
@@ -38,6 +44,10 @@ function M.render(component, context)
     return component.value
 end
 
+--- @param component statuesque.PublisherComponent
+--- @param key any
+--- @param opts? statuesque.RenderContext
+--- @return nil
 function M.ensure_subscription(component, key, opts)
     local subscribe = component.statuesque_subscribe or component.subscribe
     if type(subscribe) ~= 'function' or M._subscriptions[component] ~= nil then
@@ -56,6 +66,11 @@ function M.ensure_subscription(component, key, opts)
     M._subscriptions[component] = subscribe(component, notify) or true
 end
 
+--- Create a self-publishing component.
+--- @param render fun(self: statuesque.PublisherComponent, context?: statuesque.RenderContext): statuesque.RenderSpec
+--- @param subscribe? fun(self: statuesque.PublisherComponent, notify: fun()): any
+--- @param opts? { cache?: statuesque.CacheConfig }
+--- @return statuesque.PublisherComponent
 function M.new(render, subscribe, opts)
     opts = opts or {}
     return {

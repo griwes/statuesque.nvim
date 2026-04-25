@@ -3,6 +3,7 @@ local M = {
     _handlers = {},
 }
 
+--- @return string
 local function ensure_global_handler()
     if _G.__statuesque_click == nil then
         _G.__statuesque_click = function(minwid, clicks, button, modifiers)
@@ -16,7 +17,7 @@ local function ensure_global_handler()
 end
 
 --- Register a clickable render node.
---- @param handler string|function|table
+--- @param handler statuesque.ClickAction
 --- @param context? table
 --- @return integer id
 --- @return string function_name
@@ -31,6 +32,9 @@ function M.register(handler, context)
     return id, ensure_global_handler()
 end
 
+--- @param handler string
+--- @param payload table
+--- @return any
 local function call_string_handler(handler, payload)
     if type(_G[handler]) == 'function' then
         return _G[handler](payload)

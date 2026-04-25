@@ -1,4 +1,5 @@
 local cache = require('statuesque.cache')
+local context = require('statuesque.context')
 local spec = require('statuesque.spec')
 local style = require('statuesque.style')
 
@@ -6,17 +7,29 @@ local M = {}
 
 local render_node
 
+--- @param value any
+--- @return string
+local function encode_variant_value(value)
+    value = tostring(value or '')
+    return ('%d:%s'):format(#value, value)
+end
+
+--- @param ctx statuesque.RenderContext
+--- @return string
 local function defaults_variant(ctx)
     local defaults = ctx.backend_defaults or {}
     return table.concat({
-        defaults.left_separator or '',
-        defaults.right_separator or '',
-        defaults.inner_left_separator or '',
-        defaults.inner_right_separator or '',
-        defaults.separator_padding or '',
-    }, ',')
+        encode_variant_value(defaults.left_separator),
+        encode_variant_value(defaults.right_separator),
+        encode_variant_value(defaults.inner_left_separator),
+        encode_variant_value(defaults.inner_right_separator),
+        encode_variant_value(defaults.separator_padding),
+        encode_variant_value(defaults.side),
+    }, '|')
 end
 
+--- @param ctx statuesque.RenderContext
+--- @return string
 local function variant_key(ctx)
     return ('side=%s,separator_side=%s,defaults=%s'):format(
         ctx.side or '',
@@ -25,6 +38,9 @@ local function variant_key(ctx)
     )
 end
 
+--- @param node statuesque.NormalizedNode
+--- @param ctx statuesque.RenderContext
+--- @return string
 local function render_node_uncached(node, ctx)
     local chunks = {}
 
@@ -47,6 +63,9 @@ local function render_node_uncached(node, ctx)
     return spec.truncate_text(table.concat(chunks), node)
 end
 
+--- @param node statuesque.NormalizedNode
+--- @param ctx statuesque.RenderContext
+--- @return string
 function render_node(node, ctx)
     return cache.get_rendered(ctx.target, node._statuesque_cache_key, variant_key(ctx), function()
         return render_node_uncached(node, ctx)
@@ -54,15 +73,13 @@ function render_node(node, ctx)
 end
 
 --- Render a spec as plain text.
---- @param render_spec any
---- @param opts? table
+--- @param render_spec statuesque.RenderSpec
+--- @param opts? statuesque.RenderContext
 --- @return string
 function M.render(render_spec, opts)
-    local nodes = spec.normalize(render_spec, opts)
+    local ctx = context.with_target(opts, 'text')
+    local nodes = spec.normalize(render_spec, ctx)
     local chunks = {}
-    local ctx = vim.tbl_extend('force', opts or {}, {
-        target = 'text',
-    })
 
     for _, node in ipairs(nodes) do
         chunks[#chunks + 1] = render_node(node, ctx)

@@ -12,21 +12,29 @@ local MODE_LABELS = {
     terminal = 'TERM',
 }
 
+--- @return integer
 local function current_buf()
     return vim.api.nvim_get_current_buf()
 end
 
+--- @return integer
 local function current_win()
     return vim.api.nvim_get_current_win()
 end
 
+--- @param opts? statuesque.WidgetModeOptions
+--- @return statuesque.PublisherComponent
 function M.mode(opts)
     opts = opts or {}
     return publisher.new(function()
         local mode_name = style.mode_name()
+        local label = MODE_LABELS[mode_name] or mode_name:upper()
+        if opts.icon then
+            label = opts.icon .. ' ' .. label
+        end
+
         return {
-            text = opts.icon and (opts.icon .. ' ' .. (MODE_LABELS[mode_name] or mode_name:upper()))
-                or (MODE_LABELS[mode_name] or mode_name:upper()),
+            text = label,
             role = 'mode',
             hl = style.mode_style(mode_name),
         }
@@ -41,6 +49,8 @@ function M.mode(opts)
     })
 end
 
+--- @param opts? statuesque.WidgetFilenameOptions
+--- @return statuesque.RenderFunction
 function M.filename(opts)
     opts = opts or {}
     return function()
@@ -68,6 +78,8 @@ function M.filename(opts)
     end
 end
 
+--- @param opts? statuesque.WidgetDiagnosticsOptions
+--- @return statuesque.RenderFunction
 function M.diagnostics(opts)
     opts = opts or {}
     local labels = opts.labels
@@ -105,6 +117,8 @@ function M.diagnostics(opts)
     end
 end
 
+--- @param opts? statuesque.WidgetIconOptions
+--- @return statuesque.RenderFunction
 function M.git_branch(opts)
     opts = opts or {}
     return function()
@@ -122,6 +136,8 @@ function M.git_branch(opts)
     end
 end
 
+--- @param opts? { icon?: string }
+--- @return statuesque.RenderFunction
 function M.filetype(opts)
     opts = opts or {}
     return function()
@@ -136,6 +152,7 @@ function M.filetype(opts)
     end
 end
 
+--- @return statuesque.RenderFunction
 function M.encoding()
     return function()
         return {
@@ -148,6 +165,7 @@ function M.encoding()
     end
 end
 
+--- @return statuesque.RenderFunction
 function M.location()
     return function()
         local cursor = vim.api.nvim_win_get_cursor(current_win())
@@ -158,13 +176,19 @@ function M.location()
     end
 end
 
+--- @return statuesque.RenderFunction
 function M.progress()
     return function()
         local current = vim.fn.line('.')
         local total = math.max(1, vim.fn.line('$'))
-        local label = current == 1 and 'Top'
-            or current == total and 'Bot'
-            or (math.floor(current * 100 / total) .. '%%')
+        local label
+        if current == 1 then
+            label = 'Top'
+        elseif current == total then
+            label = 'Bot'
+        else
+            label = math.floor(current * 100 / total) .. '%%'
+        end
 
         return {
             role = 'progress',
@@ -173,6 +197,8 @@ function M.progress()
     end
 end
 
+--- @param opts? statuesque.WidgetCwdOptions
+--- @return statuesque.RenderFunction
 function M.cwd(opts)
     opts = opts or {}
     return function()
@@ -185,6 +211,7 @@ function M.cwd(opts)
     end
 end
 
+--- @return statuesque.RenderFunction
 function M.hostname()
     return function()
         return {
@@ -194,6 +221,9 @@ function M.hostname()
     end
 end
 
+--- @param value string|number|boolean
+--- @param opts? statuesque.WidgetStaticOptions
+--- @return statuesque.RenderNode
 function M.static(value, opts)
     opts = opts or {}
     return {
@@ -203,25 +233,36 @@ function M.static(value, opts)
     }
 end
 
+--- @param opts? statuesque.WidgetTabulatureOptions
+--- @return statuesque.RenderFunction
 function M.tabulature(opts)
     opts = opts or {}
     return function()
-        local ok, tabulature = pcall(require, 'tabulature')
-        if not ok or type(tabulature) ~= 'table' or type(tabulature.api) ~= 'table' then
-            return false
-        end
-
         local render_ok, renderer = pcall(require, 'tabulature.render.statuesque')
         if not render_ok or type(renderer.to_spec) ~= 'function' then
             return false
         end
 
-        local root = type(tabulature.api.tree) == 'function' and tabulature.api.tree() or nil
+        local root
+        local local_actions = opts.local_actions
+        local state_ok, state = pcall(require, 'tabulature.state')
+        if state_ok and type(state) == 'table' and type(state.to_tree) == 'function' then
+            root = state.to_tree(opts.tree_opts or {})
+            if local_actions == nil then
+                local_actions = true
+            end
+        else
+            local tabulature_ok, tabulature = pcall(require, 'tabulature')
+            if tabulature_ok and type(tabulature) == 'table' and type(tabulature.api) == 'table' then
+                root = type(tabulature.api.tree) == 'function' and tabulature.api.tree() or nil
+            end
+        end
+
         if root == nil then
             return false
         end
 
-        return renderer.to_spec(root, opts)
+        return renderer.to_spec(root, vim.tbl_extend('force', opts, { local_actions = local_actions }))
     end
 end
 
