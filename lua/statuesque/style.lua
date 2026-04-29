@@ -21,6 +21,7 @@ local DEFAULTS = {
         inner_left_separator = '',
         inner_right_separator = '',
         separator_padding = ' ',
+        sigil_leading_padding = ' ',
         gap_padding = '',
         base = { fg = '#565f89', bg = '#1f2335' },
         outer = { fg = '#1a1b26', bg = '#7aa2f7', bold = true },
@@ -35,6 +36,7 @@ local DEFAULTS = {
         inner_left_separator = '',
         inner_right_separator = '',
         separator_padding = ' ',
+        sigil_leading_padding = ' ',
         gap_padding = '',
         base = { fg = '#565f89', bg = '#1f2335' },
         outer = { fg = '#1a1b26', bg = '#bb9af7', bold = true },
@@ -48,6 +50,7 @@ local DEFAULTS = {
         inner_left_separator = '',
         inner_right_separator = '',
         separator_padding = ' ',
+        sigil_leading_padding = ' ',
         gap_padding = '',
         base = { fg = '#565f89', bg = '#1f2335' },
         outer = { fg = '#7dcfff', bg = '#24283b', bold = true },
@@ -61,6 +64,7 @@ local DEFAULTS = {
         inner_left_separator = '',
         inner_right_separator = '',
         separator_padding = ' ',
+        sigil_leading_padding = ' ',
         gap_padding = '',
         side = 'left',
         base = { fg = '#565f89', bg = '#1f2335' },
@@ -107,22 +111,31 @@ local STYLE_DEFAULTS = {
             right_separator = '',
             inner_left_separator = '',
             inner_right_separator = '',
+            separator_padding = '',
+            sigil_padding = ' ',
             gap_padding = ' ',
             right_gapped_separator = 'left',
+            sigil = '',
         },
         tabline = {
             left_separator = '',
             right_separator = '',
             inner_left_separator = '',
             inner_right_separator = '',
+            separator_padding = '',
+            sigil_padding = ' ',
             gap_padding = ' ',
             right_gapped_separator = 'left',
+            sigil = '',
+            tabulature_sigil = '𝄞',
         },
         winbar = {
             left_separator = '',
             right_separator = '',
             inner_left_separator = '',
             inner_right_separator = '',
+            separator_padding = '',
+            sigil_padding = ' ',
             gap_padding = ' ',
             right_gapped_separator = 'left',
         },
@@ -131,6 +144,8 @@ local STYLE_DEFAULTS = {
             right_separator = '',
             inner_left_separator = '',
             inner_right_separator = '',
+            separator_padding = '',
+            sigil_padding = ' ',
             gap_padding = ' ',
             right_gapped_separator = 'left',
         },
@@ -919,9 +934,17 @@ local function compose_side(prepared, opts, definition)
         end
 
         if sigil ~= nil and sigil ~= '' then
+            local sigil_padding = defaults.sigil_padding
+            if sigil_padding == nil then
+                sigil_padding = defaults.separator_padding or ''
+            end
+            local sigil_leading_padding = defaults.sigil_leading_padding
+            if sigil_leading_padding == nil then
+                sigil_leading_padding = ' '
+            end
             nodes[#nodes + 1] = {
                 role = 'sigil',
-                text = (defaults.separator_padding or '') .. sigil,
+                text = sigil_leading_padding .. sigil .. sigil_padding,
                 hl = opts.sigil_hl or defaults.sigil_hl or 'StatuesqueSigil',
                 style = { statuesque = 'sigil', surface = surface },
             }
