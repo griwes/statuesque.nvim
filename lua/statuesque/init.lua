@@ -98,6 +98,19 @@ function M.setup(config)
     end
 end
 
+--- Return the active Statuesque visual style name.
+--- @return string
+function M.style_name()
+    return require('statuesque.config').style()
+end
+
+--- Subscribe to Statuesque visual style changes.
+--- @param callback fun(style: string)
+--- @return fun()
+function M.on_style_change(callback)
+    return require('statuesque.config').on_style_change(callback)
+end
+
 --- Normalize a recursive render specification into Statuesque's canonical node list.
 --- @param render_spec statuesque.RenderSpec
 --- @param opts? statuesque.RenderContext

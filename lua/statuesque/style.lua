@@ -69,6 +69,74 @@ local DEFAULTS = {
     },
 }
 
+--- @type table<string, table<statuesque.Surface, statuesque.BackendDefaults>>
+local STYLE_DEFAULTS = {
+    slanted = {
+        statusline = {
+            left_separator = '',
+            right_separator = '',
+            inner_left_separator = '',
+            inner_right_separator = '',
+            right_gapped_separator = 'right',
+        },
+        tabline = {
+            left_separator = '',
+            right_separator = '',
+            inner_left_separator = '',
+            inner_right_separator = '',
+            right_gapped_separator = 'right',
+        },
+        winbar = {
+            left_separator = '',
+            right_separator = '',
+            inner_left_separator = '',
+            inner_right_separator = '',
+            right_gapped_separator = 'right',
+        },
+        incline = {
+            left_separator = '',
+            right_separator = '',
+            inner_left_separator = '',
+            inner_right_separator = '',
+            right_gapped_separator = 'right',
+        },
+    },
+    capsule = {
+        statusline = {
+            left_separator = '',
+            right_separator = '',
+            inner_left_separator = '',
+            inner_right_separator = '',
+            gap_padding = ' ',
+            right_gapped_separator = 'left',
+        },
+        tabline = {
+            left_separator = '',
+            right_separator = '',
+            inner_left_separator = '',
+            inner_right_separator = '',
+            gap_padding = ' ',
+            right_gapped_separator = 'left',
+        },
+        winbar = {
+            left_separator = '',
+            right_separator = '',
+            inner_left_separator = '',
+            inner_right_separator = '',
+            gap_padding = ' ',
+            right_gapped_separator = 'left',
+        },
+        incline = {
+            left_separator = '',
+            right_separator = '',
+            inner_left_separator = '',
+            inner_right_separator = '',
+            gap_padding = ' ',
+            right_gapped_separator = 'left',
+        },
+    },
+}
+
 --- @type table<string, statuesque.ModeName>
 local MODE_NAMES = {
     n = 'normal',
@@ -179,7 +247,7 @@ end
 --- @param right integer
 --- @param ratio number
 --- @return integer
-local function interpolate_channel(left, right, ratio)
+function M.interpolate_channel(left, right, ratio)
     return math.floor(left + (right - left) * ratio + 0.5)
 end
 
@@ -187,7 +255,7 @@ end
 --- @param right string?
 --- @param ratio number
 --- @return string?
-local function interpolate_color(left, right, ratio)
+function M.interpolate_color(left, right, ratio)
     local lr, lg, lb = hex_to_rgb(left)
     local rr, rg, rb = hex_to_rgb(right)
 
@@ -200,9 +268,9 @@ local function interpolate_color(left, right, ratio)
     --- @cast rb integer
 
     return rgb_to_hex(
-        interpolate_channel(lr, rr, ratio),
-        interpolate_channel(lg, rg, ratio),
-        interpolate_channel(lb, rb, ratio)
+        M.interpolate_channel(lr, rr, ratio),
+        M.interpolate_channel(lg, rg, ratio),
+        M.interpolate_channel(lb, rb, ratio)
     )
 end
 
@@ -280,8 +348,8 @@ local function interpolate_hl(outer, inner, ratio, opts)
     outer = outer or {}
     inner = inner or {}
     return ensure_readable_hl({
-        fg = interpolate_color(outer.fg, inner.fg, ratio),
-        bg = interpolate_color(outer.bg, inner.bg, ratio),
+        fg = M.interpolate_color(outer.fg, inner.fg, ratio),
+        bg = M.interpolate_color(outer.bg, inner.bg, ratio),
         bold = ratio < 0.2 and outer.bold or inner.bold,
         italic = ratio < 0.5 and outer.italic or inner.italic,
     }, opts)
@@ -343,6 +411,11 @@ end
 function M.backend_defaults(surface, opts)
     opts = opts or {}
     local defaults = copy(DEFAULTS[surface] or DEFAULTS.statusline)
+    local configured_style = opts.style or require('statuesque.config').style()
+    local style_defaults = STYLE_DEFAULTS[configured_style]
+    if type(style_defaults) == 'table' and type(style_defaults[surface]) == 'table' then
+        defaults = vim.tbl_deep_extend('force', defaults, style_defaults[surface])
+    end
     if type(opts.backend_defaults) == 'table' then
         defaults = vim.tbl_deep_extend('force', defaults, opts.backend_defaults)
     end
@@ -669,6 +742,8 @@ end
 
 --- @type table<string, string>
 local DIAGONAL_REVERSE_SEPARATORS = {
+    [''] = '',
+    [''] = '',
     [''] = '',
     [''] = '',
     [''] = '',
@@ -704,6 +779,13 @@ local function append_gapped_left(nodes, prepared, levels, defaults, surface, si
         nodes[#nodes + 1] = separator_node('base-separator', trailing_separator, sigil.hl, base_hl, defaults, 'left', {
             before = separator_padding,
         })
+        if gap_padding ~= '' and not prepared[1].custom_rendered then
+            nodes[#nodes + 1] = {
+                role = 'segment-gap',
+                text = gap_padding,
+                hl = base_hl,
+            }
+        end
     end
 
     for index, prepared_component in ipairs(prepared) do
@@ -755,20 +837,34 @@ local function append_gapped_right(nodes, prepared, levels, defaults, surface, o
     end
     local separator_padding = defaults.separator_padding or ''
     local trailing_separator = defaults.right_separator or defaults.left_separator or ' '
+    local trailing_side = 'right'
+    local leading_side = 'left'
+    if defaults.right_gapped_separator == 'left' then
+        trailing_separator = defaults.left_separator or defaults.right_separator or ' '
+        trailing_side = 'left'
+        leading_side = 'right'
+    end
     local leading_separator = diagonal_reverse_separator(trailing_separator)
 
     for index, prepared_component in ipairs(prepared) do
         local level = levels[index]
         if index > 1 and not prepared_component.custom_rendered and not prepared[index - 1].custom_rendered then
-            nodes[#nodes + 1] =
-                separator_node('segment-trailing-separator', trailing_separator, level, base_hl, defaults, 'right', {
+            nodes[#nodes + 1] = separator_node(
+                'segment-trailing-separator',
+                trailing_separator,
+                level,
+                base_hl,
+                defaults,
+                trailing_side,
+                {
                     before = separator_padding,
-                })
+                }
+            )
         end
         nodes[#nodes + 1] = section_node(prepared_component, level, index, surface)
         if not prepared_component.custom_rendered then
             nodes[#nodes + 1] =
-                separator_node('segment-leading-separator', leading_separator, base_hl, level, defaults, 'left', {
+                separator_node('segment-leading-separator', leading_separator, base_hl, level, defaults, leading_side, {
                     after = separator_padding,
                 })
         end

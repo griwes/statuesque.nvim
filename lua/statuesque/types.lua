@@ -7,6 +7,7 @@
 --- @alias statuesque.Alignment 'left'|'center'|'right'
 --- @alias statuesque.TruncateMode 'left'|'right'|'middle'|'hide'
 --- @alias statuesque.SegmentLayout 'adjacent'|'gapped'|string
+--- @alias statuesque.StyleName 'slanted'|'capsule'|string
 --- @alias statuesque.SeparatorKind 'section'|'inner'|'in_section'|string
 --- @alias statuesque.ModeName 'normal'|'insert'|'visual'|'replace'|'command'|'terminal'|string
 --- @alias statuesque.RenderScope 'global'|'window'|'buffer'|string
@@ -49,6 +50,7 @@
 --- @field side? statuesque.Side
 --- @field separator_side? statuesque.Side
 --- @field backend_defaults? statuesque.BackendDefaults
+--- @field style? statuesque.StyleName
 --- @field context? table
 --- @field on_update? fun(component: statuesque.PublisherComponent)
 --- @field inline_highlight_prefix? string
@@ -138,6 +140,7 @@
 --- @field inner_right_separator? string
 --- @field separator_padding? string
 --- @field gap_padding? string
+--- @field right_gapped_separator? 'left'|'right'|string
 --- @field side? statuesque.Side
 --- @field base? statuesque.HighlightSpec
 --- @field outer? statuesque.HighlightSpec
@@ -189,6 +192,7 @@
 
 --- @class statuesque.Config
 --- @field targets? table<string, statuesque.TargetConfig>
+--- @field style? statuesque.StyleName
 --- @field preset? boolean|statuesque.PresetOptions
 --- @field manifold? boolean|statuesque.ManifoldAutoOptions
 --- @field publish? statuesque.PublishConfig

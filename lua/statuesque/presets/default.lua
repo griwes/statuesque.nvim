@@ -20,6 +20,7 @@ local function compose_opts(opts, surface, sigil)
         segment_layout = opts.segment_layout,
         gap_padding = opts.gap_padding,
         layout = opts.layout,
+        style = opts.style,
     }
 end
 

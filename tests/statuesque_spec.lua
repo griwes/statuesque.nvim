@@ -570,6 +570,29 @@ describe('statuesque render spec', function()
         assert_equal(statuesque.render(debug, 'text'), ' 𝄞 tab ')
     end)
 
+    it('keeps capsule tabline sigils visually separated from custom-rendered content', function()
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    role = 'custom-tabs',
+                    custom_rendered = true,
+                    children = {
+                        { text = 'tab', hl = 'TabulatureActive1' },
+                    },
+                },
+            }, {
+                surface = 'tabline',
+                sigil = '𝄞',
+                style = 'capsule',
+            }),
+            'debug'
+        )
+
+        assert_equal(debug[2].role, 'base-separator')
+        assert_gapped_trailing_separator(debug[2], '')
+        assert_equal(statuesque.render(debug, 'text'), ' 𝄞 tab ')
+    end)
+
     it('lets custom-rendered components suppress adjacent layout separators', function()
         local debug = statuesque.render(
             statuesque.compose({
@@ -688,6 +711,99 @@ describe('statuesque render spec', function()
         assert_equal(debug[2].children[1].text, 'alpha')
         assert_equal(debug[3].role, 'segment-trailing-separator')
         assert_gapped_trailing_separator(debug[3], '')
+    end)
+
+    it('applies the capsule style through a succinct style option', function()
+        local debug = statuesque.render(
+            statuesque.compose({
+                { text = 'alpha' },
+                { text = 'beta' },
+            }, {
+                surface = 'statusline',
+                sigil = '',
+                style = 'capsule',
+            }),
+            'debug'
+        )
+
+        assert_equal(debug[1].role, 'segment-leading-separator')
+        assert_gapped_leading_separator(debug[1], '')
+        assert_equal(debug[2].children[1].text, 'alpha')
+        assert_equal(debug[3].role, 'segment-trailing-separator')
+        assert_gapped_trailing_separator(debug[3], '')
+        assert_equal(debug[4].role, 'segment-gap')
+        assert_equal(debug[4].text, ' ')
+        assert_equal(debug[5].role, 'segment-leading-separator')
+        assert_gapped_leading_separator(debug[5], '')
+        assert_equal(debug[6].children[1].text, 'beta')
+        assert_equal(debug[7].role, 'segment-trailing-separator')
+        assert_gapped_trailing_separator(debug[7], '')
+    end)
+
+    it('keeps a base-styled gap between a capsule sigil and the first segment', function()
+        local composed = statuesque.compose({
+            { text = 'NORMAL' },
+        }, {
+            surface = 'statusline',
+            sigil = '',
+            style = 'capsule',
+        })
+        local debug = statuesque.render(composed, 'debug')
+        local rendered = statuesque.render(composed, 'text')
+
+        assert_contains(rendered, '    NORMAL  ')
+        assert(not rendered:find('', 1, true), rendered)
+        assert_equal(debug[3].role, 'segment-gap')
+        assert_equal(debug[3].text, ' ')
+        assert_equal(debug[3].hl.bg, debug[2].hl.bg)
+    end)
+
+    it('renders right-side capsule sections with symmetric separators and base gaps', function()
+        local composed = statuesque.compose({
+            right = {
+                { text = 'utf-8 unix' },
+                { text = '1:1' },
+                { text = 'Top' },
+            },
+        }, {
+            surface = 'statusline',
+            sigil = '',
+            style = 'capsule',
+        })
+        local debug = statuesque.render(composed, 'debug')
+        local rendered = statuesque.render(composed, 'text')
+
+        assert_contains(rendered, ' utf-8 unix   1:1   Top ')
+        assert(not rendered:find(' utf%-8 unix ', 1, false), rendered)
+        assert(not rendered:find('', 1, true), rendered)
+        assert(not rendered:find(' 1:1 ', 1, true), rendered)
+        assert_equal(debug[2].children[1].text, '')
+        assert_equal(debug[2].children[1].hl.fg, debug[3].hl.bg)
+        assert_equal(debug[2].children[1].hl.bg, debug[5].hl.bg)
+        assert_equal(debug[4].children[2].text, '')
+        assert_equal(debug[4].children[2].hl.fg, debug[3].hl.bg)
+        assert_equal(debug[4].children[2].hl.bg, debug[5].hl.bg)
+        assert_equal(debug[6].children[1].text, '')
+        assert_equal(debug[6].children[1].hl.fg, debug[7].hl.bg)
+        assert_equal(debug[6].children[1].hl.bg, debug[5].hl.bg)
+        assert_equal(debug[8].children[2].text, '')
+        assert_equal(debug[8].children[2].hl.fg, debug[7].hl.bg)
+        assert_equal(debug[8].children[2].hl.bg, debug[5].hl.bg)
+    end)
+
+    it('notifies subscribers when the configured style changes', function()
+        local seen = {}
+        local unsubscribe = statuesque.on_style_change(function(style_name)
+            seen[#seen + 1] = style_name
+        end)
+
+        statuesque.setup({ style = 'capsule', manifold = false })
+        statuesque.setup({ style = 'slanted', manifold = false })
+        unsubscribe()
+
+        assert_equal(seen[1], 'capsule')
+        assert_equal(seen[2], 'slanted')
+        assert_equal(statuesque.style_name(), 'slanted')
     end)
 
     it('keeps interpolated section text readable on low-contrast palettes', function()
