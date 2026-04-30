@@ -71,6 +71,9 @@ local function copy_metadata(node)
     if node.on_click ~= nil then
         metadata.on_click = 'unsupported'
     end
+    if node.on_hover ~= nil then
+        metadata.on_hover = 'unsupported'
+    end
 
     if next(metadata) == nil then
         return nil

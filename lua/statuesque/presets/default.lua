@@ -1,6 +1,4 @@
 local style = require('statuesque.style')
-local widgets = require('statuesque.widgets')
-
 local M = {}
 
 --- @return boolean
@@ -24,6 +22,18 @@ local function compose_opts(opts, surface, sigil)
     }
 end
 
+--- @param opts statuesque.PresetOptions
+--- @param surface string
+--- @param fallback statuesque.ComposeInput
+--- @return statuesque.ComposeInput
+local function widget_specs(opts, surface, fallback)
+    local configured = type(opts.widgets) == 'table' and opts.widgets[surface] or nil
+    if configured ~= nil then
+        return configured
+    end
+    return fallback
+end
+
 --- Build the default preset surfaces without installing them.
 --- @param opts? statuesque.PresetOptions
 --- @return table<string, statuesque.RenderNode>
@@ -35,39 +45,47 @@ function M.surfaces(opts)
         tabline_sigil = style.backend_defaults('tabline').tabulature_sigil
     end
 
+    local statusline_widgets = widget_specs(opts, 'statusline', {
+        left = {
+            { name = 'mode', opts = { icon = opts.status_icon } },
+            { name = 'filename' },
+            { name = 'diagnostics', opts = { empty = false } },
+            { name = 'git_repo', optional = true, opts = opts.git_repo_opts or {} },
+        },
+        right = {
+            { name = 'filetype' },
+            { name = 'encoding' },
+            { name = 'location' },
+            { name = 'progress' },
+        },
+    })
+    local winbar_widgets = widget_specs(opts, 'winbar', {
+        { name = 'filename', opts = { path = ':~:.', max_width = 80 } },
+    })
     local surfaces = {
-        statusline = style.compose({
-            left = {
-                widgets.mode({ icon = opts.status_icon }),
-                widgets.filename(),
-                widgets.diagnostics({ empty = false }),
-                widgets.git_branch(),
-            },
-            right = {
-                widgets.filetype(),
-                widgets.encoding(),
-                widgets.location(),
-                widgets.progress(),
-            },
-        }, compose_opts(opts, 'statusline', opts.status_sigil)),
-        winbar = style.compose({
-            widgets.filename({ path = ':~:.', max_width = 80 }),
-        }, compose_opts(opts, 'winbar', opts.winbar_sigil)),
+        statusline = style.compose(statusline_widgets, compose_opts(opts, 'statusline', opts.status_sigil)),
+        winbar = style.compose(winbar_widgets, compose_opts(opts, 'winbar', opts.winbar_sigil)),
     }
 
     if tabulature_enabled then
-        surfaces.tabline = style.compose({
-            left = {
-                widgets.tabulature(opts.tabulature_opts or {}),
-            },
-            right = {
-                widgets.cwd({ max_width = opts.tabline_cwd_max_width or 48 }),
-            },
-        }, compose_opts(opts, 'tabline', tabline_sigil or opts.tabline_sigil))
+        surfaces.tabline = style.compose(
+            widget_specs(opts, 'tabline', {
+                left = {
+                    { name = 'tabulature', opts = opts.tabulature_opts or {} },
+                },
+                right = {
+                    { name = 'cwd', opts = { max_width = opts.tabline_cwd_max_width or 48 } },
+                },
+            }),
+            compose_opts(opts, 'tabline', tabline_sigil or opts.tabline_sigil)
+        )
     else
-        surfaces.tabline = style.compose({
-            widgets.cwd({ max_width = opts.tabline_cwd_max_width or 48 }),
-        }, compose_opts(opts, 'tabline', opts.tabline_sigil))
+        surfaces.tabline = style.compose(
+            widget_specs(opts, 'tabline', {
+                { name = 'cwd', opts = { max_width = opts.tabline_cwd_max_width or 48 } },
+            }),
+            compose_opts(opts, 'tabline', opts.tabline_sigil)
+        )
     end
 
     return surfaces

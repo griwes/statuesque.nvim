@@ -39,6 +39,9 @@ Supported segment fields:
 - `style`: target-neutral style metadata for adapters that can use it.
 - `children`: recursive child specs.
 - `on_click`: function, function name, or semantic `{ id, args }` action.
+- `on_hover`: function, function name, or semantic `{ id, args }` action. Targets
+  must advertise whether this is supported, registered for later hit testing, or
+  degraded.
 - `id`: stable semantic id.
 - `role`: producer-defined semantic role such as `domain`, `tab`, or `status`.
 - `priority`, `min_width`, `max_width`, `truncate`: layout hints.
@@ -46,6 +49,9 @@ Supported segment fields:
 - `render`: function-backed element. The function receives the render context and returns a render spec.
 - `cache`: cache policy. `true` or `{ key = ... }` caches both the normalized fragment and backend-rendered output until `statuesque.invalidate(key)`. Anonymous `cache = true` table components are keyed by table identity; use `{ key = ... }` when a cache should be shared across equivalent component instances.
 - `separator`: backend-specific separator request such as `'section'` or `'inner'`.
+- `name`: runtimepath widget reference. `{ name = 'git_repo', optional = true,
+  opts = {...} }` loads `statuesque.widgets.git_repo` and renders the returned
+  component. `optional = true` makes a missing widget render no content.
 
 Publisher components are tables that advertise `statuesque_component = true`
 and provide `render(context)` plus optional `subscribe(self, notify)`.
@@ -90,8 +96,10 @@ require('statuesque').setup({
 The default preset installs a global statusline, tabline, and winbar. It uses a
 section-style layout with interpolated styles instead of lualine's strict
 `a/b/c/x/y/z` segment model. Built-in widgets cover mode, filename, diagnostics,
-git branch, filetype, location, progress, cwd, hostname, static text, and a
-tabulature bridge.
+git branch, filetype, location, progress, cwd, and hostname. Other plugins can
+ship default-preset widgets, such as Tabulature's tabline component or Stratum's
+live repository component, by adding `lua/statuesque/widgets/*.lua` modules to
+runtimepath without moving their state logic into Statuesque.
 
 `statuesque.compose()` accepts either a simple component list or explicit
 `{ left = {...}, right = {...} }` sections. Right sections are separated with
@@ -139,8 +147,9 @@ local debug = statuesque.render(spec, 'debug')
 local tabline = statuesque.render(spec, 'tabline')
 local incline = statuesque.render(spec, 'incline')
 local composed = statuesque.compose({
-    require('statuesque.widgets').mode(),
-    require('statuesque.widgets').filename(),
+    { name = 'mode' },
+    { name = 'filename' },
+    { name = 'git_repo', optional = true },
 }, {
     surface = 'statusline',
 })
@@ -152,10 +161,21 @@ end)
 statuesque.set_surface('tabline', 'domains')
 statuesque.install_surface('tabline', 'tabline')
 
+local capabilities = statuesque.backend_capabilities('statusline')
+```
+
+## Backend Authoring
+
+Backends translate normalized render specs into a concrete target shape. A
+backend may be registered at runtime:
+
+```lua
 statuesque.register_backend('custom', {
     capabilities = {
+        render_scope = 'global',
         highlights = false,
         clicks = false,
+        hover = false,
         align = false,
         raw = false,
         install = false,
@@ -164,8 +184,6 @@ statuesque.register_backend('custom', {
         return statuesque.render(render_spec, 'text', opts)
     end,
 })
-
-local capabilities = statuesque.backend_capabilities('statusline')
 ```
 
 Custom backends can also be shipped as runtimepath modules. Put a module at
@@ -176,8 +194,10 @@ Custom backends can also be shipped as runtimepath modules. Put a module at
 -- lua/statuesque/backend/my_surface.lua
 return {
     capabilities = {
+        render_scope = 'global',
         highlights = false,
         clicks = false,
+        hover = false,
         align = false,
         raw = true,
         install = false,
@@ -193,6 +213,35 @@ Then target it by name:
 ```lua
 local rendered = require('statuesque').render(spec, 'my_surface')
 ```
+
+The backend contract is intentionally narrow:
+
+- `render(render_spec, opts)` is required.
+- `capabilities` is optional and should describe what producer plugins may rely
+  on before they render.
+- Backends that can install themselves may expose an `install(surface, opts)`
+  helper, but Statuesque only calls built-in installation helpers today.
+- Invalid runtimepath modules fail with an explicit backend-contract error.
+
+Capability fields should be explicit:
+
+- `render_scope`: `'global'`, `'window'`, `'buffer'`, or another documented
+  scope string.
+- `window_context` and `buffer_context`: whether the backend can use window or
+  buffer identity while rendering.
+- `highlights`: `true`, `false`, `'preserved'`, `'groups'`, or another
+  descriptive degradation string.
+- `clicks`: `true`, `false`, `'preserved'`, or another descriptive degradation
+  string.
+- `hover`: `true`, `false`, `'preserved'`, `'registered'`, or another
+  descriptive degradation string.
+- `click_degradation` and `hover_degradation`: extra explanation when a target
+  carries metadata but cannot dispatch the action.
+- `raw`: whether backend-specific raw chunks are accepted.
+- `align`: whether semantic alignment markers are supported.
+- `install`: whether the target is installable through Statuesque.
+- `degradation_metadata`: whether unsupported semantics are surfaced as
+  metadata instead of being silently dropped.
 
 ## Targets
 
@@ -211,10 +260,9 @@ the caller, while function handlers are invoked directly.
 `statusline`, `tabline`, or `winbar`. Statusline installs always use Neovim's
 global statusline mode (`laststatus=3`).
 
-Backends can advertise `capabilities` with fields such as `highlights`,
-`clicks`, `align`, `raw`, and `install`. Built-in backends expose capabilities
-through `backend_capabilities(target)`. Unsupported target behavior should
-degrade explicitly; for example, the Incline backend marks unsupported click
-handlers as `statuesque.on_click = 'unsupported'` metadata instead of pretending
-clicks work. The `text` backend drops highlight, click, and alignment semantics
-while preserving textual content and raw text.
+Backends advertise `capabilities`; built-in and runtimepath backends expose
+those capabilities through `backend_capabilities(target)`. Unsupported target
+behavior should degrade explicitly. For example, the Incline backend marks
+unsupported click and hover handlers as Statuesque metadata instead of
+pretending those callbacks work. The `text` backend drops highlight, click,
+hover, and alignment semantics while preserving textual content and raw text.

@@ -1,6 +1,7 @@
 local cache = require('statuesque.cache')
 local clicks = require('statuesque.clicks')
 local context = require('statuesque.context')
+local hovers = require('statuesque.hovers')
 local spec = require('statuesque.spec')
 local style = require('statuesque.style')
 
@@ -122,7 +123,9 @@ end
 --- @param ctx statuesque.RenderContext
 --- @return string
 local function render_node_uncached(node, ctx)
-    local chunks = { node_prefix(node, ctx) }
+    local prefix = node_prefix(node, ctx)
+    local chunks = { prefix }
+    hovers.advance(ctx, prefix)
 
     if node.children ~= nil then
         for _, child in ipairs(node.children) do
@@ -155,10 +158,12 @@ end
 --- @param ctx statuesque.RenderContext
 --- @return string
 function render_node(node, ctx)
+    local hover_start_col = ctx._statuesque_hover_col or 0
+    local hover_span_start = hovers.span_count(ctx)
     local inline_highlight_start = ctx.inline_highlight_index
     local inline_definition_start = #ctx.inline_highlight_definitions
-    --- @type { rendered: string, inline_highlight_count?: integer, inline_highlight_definitions?: { name: string, hl: statuesque.HighlightSpec }[] }
-    local record = cache.get_rendered(ctx.target, node._statuesque_cache_key, variant_key(ctx), function()
+    --- @type { rendered: string, inline_highlight_count?: integer, inline_highlight_definitions?: { name: string, hl: statuesque.HighlightSpec }[], hover_width?: integer, hover_spans?: table[] }
+    local record, from_cache = cache.get_rendered(ctx.target, node._statuesque_cache_key, variant_key(ctx), function()
         local rendered = render_node_uncached(node, ctx)
         local inline_highlight_count = ctx.inline_highlight_index - inline_highlight_start
         local definitions = {}
@@ -171,11 +176,25 @@ function render_node(node, ctx)
             rendered = rendered,
             inline_highlight_count = inline_highlight_count,
             inline_highlight_definitions = definitions,
+            hover_width = (ctx._statuesque_hover_col or hover_start_col) - hover_start_col,
+            hover_spans = hovers.capture_relative(ctx, hover_span_start, hover_start_col),
         }
     end)
 
     if type(record) ~= 'table' or record.rendered == nil then
         return tostring(record or '')
+    end
+
+    if from_cache then
+        hovers.replay_relative(ctx, record.hover_spans, hover_start_col)
+        ctx._statuesque_hover_col = hover_start_col + (record.hover_width or hovers.display_width(record.rendered))
+    end
+
+    if node.on_hover ~= nil then
+        hovers.record_span(ctx, node.on_hover, {
+            node = node,
+            target = ctx.target,
+        }, hover_start_col, ctx._statuesque_hover_col or hover_start_col)
     end
 
     ctx.inline_highlight_index = inline_highlight_start + (record.inline_highlight_count or 0)
@@ -194,6 +213,8 @@ function M.render(render_spec, opts)
         inline_highlight_definitions = {},
     })
 
+    hovers.begin_render(ctx)
+
     local chunks = {}
     for _, node in ipairs(spec.normalize(render_spec, ctx)) do
         local rendered = render_node(node, ctx)
@@ -202,7 +223,9 @@ function M.render(render_spec, opts)
         end
     end
 
-    return table.concat(chunks)
+    local rendered = table.concat(chunks)
+    hovers.finish_render(ctx)
+    return rendered
 end
 
 return M

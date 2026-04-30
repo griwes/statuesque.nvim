@@ -1,8 +1,11 @@
 local M = {}
 
 M.capabilities = {
+    render_scope = 'global',
     highlights = false,
     clicks = false,
+    hover = false,
+    hover_degradation = 'metadata',
     align = false,
     raw = true,
     install = false,

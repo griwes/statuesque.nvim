@@ -5,10 +5,14 @@ local publisher = require('statuesque.publisher')
 local KNOWN_FIELDS = {
     'text',
     'raw',
+    'name',
+    'optional',
+    'opts',
     'align',
     'hl',
     'style',
     'on_click',
+    'on_hover',
     'id',
     'role',
     'priority',
@@ -22,6 +26,7 @@ local KNOWN_FIELDS = {
     'separator_side',
     'custom_rendered',
     '_statuesque_cache_key',
+    '_statuesque_widget_spec',
 }
 
 local KNOWN_FIELD_SET = {}
@@ -34,6 +39,21 @@ local TRUNCATE_MODES = {
     right = true,
     middle = true,
     hide = true,
+}
+
+local WIDGET_REFERENCE_FIELDS = {
+    name = true,
+    optional = true,
+    opts = true,
+    _statuesque_widget_spec = true,
+}
+
+local SEGMENT_COPY_EXCLUDE_FIELDS = {
+    text = true,
+    raw = true,
+    render = true,
+    cache = true,
+    _statuesque_widget_spec = true,
 }
 
 --- @param target table[]
@@ -69,6 +89,54 @@ local function copy_table(value)
         copy[key] = copy_table(child)
     end
     return copy
+end
+
+--- @param value table
+--- @return boolean
+local function is_widget_reference(value)
+    if type(value.name) ~= 'string' or value.name == '' then
+        return false
+    end
+
+    for key in pairs(value) do
+        if not WIDGET_REFERENCE_FIELDS[key] then
+            return false
+        end
+    end
+
+    return true
+end
+
+--- @param err any
+--- @param module string
+--- @return boolean
+local function is_module_not_found(err, module)
+    return tostring(err):find(("module '%s' not found"):format(module), 1, true) ~= nil
+end
+
+--- @param value table
+--- @param opts statuesque.RenderContext
+--- @return statuesque.NormalizedNode[]
+local function normalize_widget_reference(value, opts)
+    if value._statuesque_widget_spec ~= nil then
+        return M.normalize(value._statuesque_widget_spec, opts)
+    end
+
+    local module = 'statuesque.widgets.' .. value.name
+    local ok, provider_or_error = pcall(require, module)
+    if not ok then
+        if value.optional == true and is_module_not_found(provider_or_error, module) then
+            return {}
+        end
+        error(provider_or_error)
+    end
+
+    if type(provider_or_error) ~= 'function' then
+        error(('statuesque widget module %s must return a function'):format(module))
+    end
+
+    value._statuesque_widget_spec = provider_or_error(value.opts or {})
+    return M.normalize(value._statuesque_widget_spec, opts)
 end
 
 --- @param value table
@@ -108,7 +176,7 @@ local function normalize_segment(value, opts)
     end
 
     for _, field in ipairs(KNOWN_FIELDS) do
-        if field ~= 'text' and field ~= 'raw' and field ~= 'render' and field ~= 'cache' and value[field] ~= nil then
+        if not SEGMENT_COPY_EXCLUDE_FIELDS[field] and value[field] ~= nil then
             segment[field] = copy_table(value[field])
         end
     end
@@ -232,6 +300,10 @@ function M.normalize(render_spec, opts)
         return normalize_dynamic(render_spec, opts, function()
             return publisher.render(render_spec, context_for(opts))
         end)
+    end
+
+    if is_widget_reference(render_spec) then
+        return normalize_widget_reference(render_spec, opts)
     end
 
     if type(render_spec.render) == 'function' then

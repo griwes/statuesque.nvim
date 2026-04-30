@@ -36,6 +36,13 @@
 
 --- @alias statuesque.ClickAction string|fun(payload: table): any|statuesque.ClickActionObject
 
+--- @class statuesque.HoverActionObject
+--- @field id string Controller-specific action identifier.
+--- @field args? table Controller-specific action arguments.
+
+--- @alias statuesque.HoverPhase 'enter'|'move'|'leave'|string
+--- @alias statuesque.HoverAction string|fun(payload: table): any|statuesque.HoverActionObject
+
 --- @class statuesque.CachePolicy
 --- @field enabled? boolean
 --- @field key? any
@@ -81,6 +88,7 @@
 --- @field separator_text? string
 --- @field custom_rendered? boolean When true, composed bars pass this node through without generated section separators.
 --- @field on_click? statuesque.ClickAction
+--- @field on_hover? statuesque.HoverAction
 --- @field id? string
 --- @field role? string
 --- @field priority? integer
@@ -98,7 +106,7 @@
 --- @field children? statuesque.NormalizedNode[]
 
 --- @alias statuesque.RenderFunction fun(context?: statuesque.RenderContext): statuesque.RenderSpec
---- @alias statuesque.RenderSpec nil|false|string|number|boolean|statuesque.RenderNode|statuesque.RenderSpec[]|statuesque.RenderFunction|statuesque.PublisherComponent
+--- @alias statuesque.RenderSpec nil|false|string|number|boolean|statuesque.RenderNode|statuesque.WidgetReference|statuesque.RenderSpec[]|statuesque.RenderFunction|statuesque.PublisherComponent
 
 --- @class statuesque.PublisherComponent
 --- @field statuesque_component? boolean
@@ -110,12 +118,19 @@
 --- @field statuesque_render? fun(self: statuesque.PublisherComponent, context?: statuesque.RenderContext): statuesque.RenderSpec
 --- @field statuesque_subscribe? fun(self: statuesque.PublisherComponent, notify: fun()): any
 
+--- @class statuesque.WidgetReference
+--- @field name string Runtimepath widget module under `statuesque.widgets.<name>`.
+--- @field optional? boolean Return no content instead of failing when the module is absent.
+--- @field opts? table Options passed to the widget module factory.
+
 --- @class statuesque.BackendCapabilities
 --- @field target? statuesque.Target
 --- @field snapshot? boolean
 --- @field highlights? boolean|'preserved'|'groups'|string
 --- @field clicks? boolean|'preserved'|string
 --- @field click_degradation? string
+--- @field hover? boolean|'preserved'|'registered'|string
+--- @field hover_degradation? string
 --- @field align? boolean|'preserved'|string
 --- @field raw? boolean|'preserved'|string
 --- @field install? boolean
@@ -209,6 +224,8 @@
 --- @field tabline_sigil? string|false
 --- @field winbar_sigil? string|false
 --- @field tabulature_opts? table
+--- @field git_repo_opts? table
+--- @field widgets? table<string, statuesque.ComposeInput>
 --- @field tabline_cwd_max_width? integer
 
 --- @class statuesque.WidgetModeOptions
@@ -233,15 +250,6 @@
 --- @class statuesque.WidgetCwdOptions
 --- @field path? string
 --- @field max_width? integer
-
---- @class statuesque.WidgetStaticOptions
---- @field role? string
---- @field hl? statuesque.Highlight
-
---- @class statuesque.WidgetTabulatureOptions
---- @field tree_opts? table
---- @field local_actions? boolean Enable direct local Neovim tabpage actions for locally sourced Tabulature state.
---- @field [string] any
 
 --- @class statuesque.ManifoldHostOptions
 --- @field surface? string

@@ -213,7 +213,9 @@ end
 --- @param target 'statusline'|'tabline'|'winbar'
 --- @return any
 function M.render_installed_surface(surface, target)
-    local context = require('statuesque.context').with_target({}, target)
+    local context = require('statuesque.context').with_target({
+        surface = surface,
+    }, target)
     return M.render_surface(surface, target, context)
 end
 
@@ -241,6 +243,7 @@ end
 --- @return nil
 function M.install_surface(surface, target)
     local expression = M.surface_expression(surface, target)
+    require('statuesque.hovers').install_surface(surface, target)
 
     if target == 'statusline' then
         vim.o.laststatus = 3
@@ -270,6 +273,15 @@ end
 --- @return any
 function M.click(id, button, modifiers, context)
     return require('statuesque.clicks').dispatch(id, button, modifiers, context)
+end
+
+--- Dispatch a hover registered while rendering a target that preserves hover metadata.
+--- @param id integer|string
+--- @param phase? statuesque.HoverPhase
+--- @param context? table
+--- @return any
+function M.hover(id, phase, context)
+    return require('statuesque.hovers').dispatch(id, phase, context)
 end
 
 return M

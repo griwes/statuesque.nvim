@@ -94,12 +94,14 @@ describe('statuesque render spec', function()
     it('renders debug snapshots without executable function values', function()
         local debug = statuesque.render({
             {
-                text = 'click',
+                text = 'actions',
                 on_click = function() end,
+                on_hover = function() end,
             },
         }, 'debug')
 
         assert_equal(debug[1].on_click, '<function>')
+        assert_equal(debug[1].on_hover, '<function>')
     end)
 
     it('renders plain text with truncation policies', function()
@@ -444,6 +446,23 @@ describe('statuesque render spec', function()
         assert_equal(statuesque.render({ publisher }, 'text'), 'cold')
         notify()
         assert_equal(statuesque.render({ publisher }, 'text'), 'hot')
+    end)
+
+    it('resolves runtimepath widget references and optional missing widgets', function()
+        assert_equal(statuesque.render({ name = 'missing_widget', optional = true }, 'text'), '')
+
+        with_runtimepath('tests/fixtures/widget-module', function()
+            package.loaded['statuesque.widgets.git_repo'] = nil
+            local rendered = statuesque.render({
+                name = 'git_repo',
+                opts = {
+                    icon = 'G',
+                },
+            }, 'text')
+            package.loaded['statuesque.widgets.git_repo'] = nil
+
+            assert_equal(rendered, 'G external-repo')
+        end)
     end)
 
     it('composes section-style bars with interpolated styles and explicit separators', function()
@@ -1139,6 +1158,22 @@ describe('statuesque render spec', function()
         assert(rendered:find('%T', 1, true), rendered)
     end)
 
+    it('registers Vim target hover handlers without emitting fake hover syntax', function()
+        local hovers = require('statuesque.hovers')
+        local before = hovers._next_id
+        local rendered = statuesque.render({
+            {
+                text = 'Alpha',
+                on_hover = { id = 'domain.hover', args = { domain = 1 } },
+            },
+        }, 'tabline')
+
+        assert_equal(rendered, 'Alpha')
+        assert_equal(hovers._next_id, before + 1)
+        assert_equal(statuesque.hover(before, 'enter').action, 'domain.hover')
+        assert_equal(statuesque.hover(before, 'enter').args.domain, 1)
+    end)
+
     it('does not escape already rendered child Vim statusline syntax', function()
         local rendered = statuesque.render({
             {
@@ -1192,6 +1227,144 @@ describe('statuesque render spec', function()
         assert_equal(seen.target, 'statusline')
     end)
 
+    it('dispatches hover callbacks through the hover registry', function()
+        local hovers = require('statuesque.hovers')
+        local seen
+        local id = hovers.register(function(payload)
+            seen = payload
+            return 'hovered'
+        end, {
+            node = { id = 'node:hover' },
+            target = 'tabline',
+        })
+
+        assert_equal(hovers.dispatch(id, 'enter', { row = 1, col = 2 }), 'hovered')
+        assert_equal(seen.id, id)
+        assert_equal(seen.phase, 'enter')
+        assert_equal(seen.row, 1)
+        assert_equal(seen.col, 2)
+        assert_equal(seen.node.id, 'node:hover')
+        assert_equal(seen.target, 'tabline')
+
+        local action_id = hovers.register({ id = 'hover.action', args = { tab = 3 } })
+        local payload = hovers.dispatch(action_id, 'leave')
+        assert_equal(payload.action, 'hover.action')
+        assert_equal(payload.args.tab, 3)
+        assert_equal(payload.phase, 'leave')
+    end)
+
+    it('dispatches installed-surface hover spans from rendered columns', function()
+        local hovers = require('statuesque.hovers')
+        local seen = {}
+        hovers._active = {}
+
+        statuesque.set_surface('hover-tabline', {
+            ' ',
+            {
+                text = 'Alpha',
+                on_hover = function(payload)
+                    seen[#seen + 1] = payload
+                end,
+            },
+            ' ',
+            {
+                text = 'Beta',
+                on_hover = function(payload)
+                    seen[#seen + 1] = payload
+                end,
+            },
+        })
+
+        assert_equal(statuesque.render_installed_surface('hover-tabline', 'tabline'), ' Alpha Beta')
+
+        hovers.dispatch_position('hover-tabline', 'tabline', 2, 1)
+        hovers.dispatch_position('hover-tabline', 'tabline', 3, 1)
+        hovers.dispatch_position('hover-tabline', 'tabline', 8, 1)
+        hovers.dispatch_position('hover-tabline', 'tabline', 99, 1)
+
+        assert_equal(seen[1].phase, 'enter')
+        assert_equal(seen[1].col, 2)
+        assert_equal(seen[1].surface, 'hover-tabline')
+        assert_equal(seen[2].phase, 'move')
+        assert_equal(seen[3].phase, 'leave')
+        assert_equal(seen[4].phase, 'enter')
+        assert_equal(seen[4].node.text, 'Beta')
+        assert_equal(seen[5].phase, 'leave')
+    end)
+
+    it('dispatches hover leave when the mouse moves off an installed surface', function()
+        local hovers = require('statuesque.hovers')
+        local previous_targets = hovers._installed_targets
+        local seen = {}
+        hovers._active = {}
+        hovers._installed_targets = {
+            tabline = 'leave-tabline',
+        }
+
+        statuesque.set_surface('leave-tabline', {
+            {
+                text = 'Alpha',
+                on_hover = function(payload)
+                    seen[#seen + 1] = payload
+                end,
+            },
+        })
+
+        assert_equal(statuesque.render_installed_surface('leave-tabline', 'tabline'), 'Alpha')
+        hovers.handle_mousemove({
+            screenrow = 1,
+            screencol = 1,
+        })
+        hovers.handle_mousemove({
+            screenrow = 2,
+            screencol = 1,
+        })
+
+        assert_equal(seen[1].phase, 'enter')
+        assert_equal(seen[1].surface, 'leave-tabline')
+        assert_equal(seen[2].phase, 'leave')
+        assert_equal(seen[2].surface, 'leave-tabline')
+        assert_equal(seen[2].mouse.screenrow, 2)
+
+        hovers._installed_targets = previous_targets
+        hovers._active = {}
+    end)
+
+    it('replays hover spans when Vim render fragments come from cache', function()
+        local hovers = require('statuesque.hovers')
+        local calls = 0
+        local seen = {}
+        hovers._active = {}
+
+        statuesque.set_surface('cached-hover-tabline', {
+            {
+                id = 'cached-hover-fragment',
+                cache = { key = 'cached-hover-fragment' },
+                render = function()
+                    calls = calls + 1
+                    return {
+                        'prefix:',
+                        {
+                            text = 'Hot',
+                            on_hover = function(payload)
+                                seen[#seen + 1] = payload
+                            end,
+                        },
+                    }
+                end,
+            },
+        })
+
+        assert_equal(statuesque.render_installed_surface('cached-hover-tabline', 'tabline'), 'prefix:Hot')
+        assert_equal(statuesque.render_installed_surface('cached-hover-tabline', 'tabline'), 'prefix:Hot')
+        assert_equal(calls, 1)
+
+        hovers.dispatch_position('cached-hover-tabline', 'tabline', 8, 1)
+
+        assert_equal(seen[1].phase, 'enter')
+        assert_equal(seen[1].node.text, 'Hot')
+    end)
+
     it('renders configured surfaces from providers', function()
         statuesque.register_provider('demo', function(context)
             return {
@@ -1211,6 +1384,7 @@ describe('statuesque render spec', function()
                 role = 'tab',
                 hl = 'StatuesqueTab',
                 on_click = { id = 'tab.select', args = { tab = 1 } },
+                on_hover = { id = 'tab.preview', args = { tab = 1 } },
                 'Alpha',
             },
         }, 'incline')
@@ -1220,6 +1394,7 @@ describe('statuesque render spec', function()
         assert_equal(rendered[1].statuesque.id, 'tab:1')
         assert_equal(rendered[1].statuesque.role, 'tab')
         assert_equal(rendered[1].statuesque.on_click, 'unsupported')
+        assert_equal(rendered[1].statuesque.on_hover, 'unsupported')
     end)
 
     it('isolates cached Incline table output from consumer mutation', function()
@@ -1301,6 +1476,9 @@ describe('statuesque render spec', function()
             assert_equal(capabilities.fixture, true)
             assert_equal(capabilities.raw, true)
             assert_equal(capabilities.install, false)
+            assert_equal(capabilities.render_scope, 'global')
+            assert_equal(capabilities.hover, false)
+            assert_equal(capabilities.hover_degradation, 'metadata')
         end)
 
         backend._registered.runtime_fixture = nil
@@ -1319,12 +1497,16 @@ describe('statuesque render spec', function()
         assert_equal(debug.target, 'debug')
         assert_equal(debug.snapshot, true)
         assert_equal(debug.highlights, 'preserved')
+        assert_equal(debug.hover, 'preserved')
         assert_equal(vim_target.target, 'vim')
         assert_equal(vim_target.highlights, true)
         assert_equal(vim_target.clicks, true)
+        assert_equal(vim_target.hover, 'registered')
+        assert_equal(vim_target.hover_degradation, 'requires_surface_hit_testing')
         assert_equal(statusline.target, 'statusline')
         assert_equal(statusline.highlights, true)
         assert_equal(statusline.clicks, true)
+        assert_equal(statusline.hover, 'registered')
         assert_equal(statusline.align, true)
         assert_equal(statusline.install, true)
         assert_equal(statusline.global_statusline, true)
@@ -1339,6 +1521,7 @@ describe('statuesque render spec', function()
         assert_equal(winbar.buffer_context, true)
         assert_equal(text.highlights, false)
         assert_equal(text.clicks, false)
+        assert_equal(text.hover, false)
         assert_equal(text.render_scope, 'global')
         assert_equal(incline.render_scope, 'window')
         assert_equal(incline.window_context, true)
@@ -1346,6 +1529,8 @@ describe('statuesque render spec', function()
         assert_equal(incline.highlights, 'groups')
         assert_equal(incline.clicks, false)
         assert_equal(incline.click_degradation, 'metadata')
+        assert_equal(incline.hover, false)
+        assert_equal(incline.hover_degradation, 'metadata')
     end)
 
     it('preserves custom backend capabilities', function()
@@ -1368,6 +1553,26 @@ describe('statuesque render spec', function()
         assert_equal(capabilities.custom_surface, true)
     end)
 
+    it('documents the runtime backend authoring contract', function()
+        local readme = table.concat(vim.fn.readfile('README.md'), '\n')
+
+        assert_contains(readme, '## Backend Authoring')
+        assert_contains(readme, 'render(render_spec, opts)')
+        assert_contains(readme, 'capabilities')
+        assert_contains(readme, 'render_scope')
+        assert_contains(readme, 'window_context')
+        assert_contains(readme, 'buffer_context')
+        assert_contains(readme, 'highlights')
+        assert_contains(readme, 'clicks')
+        assert_contains(readme, 'hover')
+        assert_contains(readme, 'click_degradation')
+        assert_contains(readme, 'hover_degradation')
+        assert_contains(readme, 'raw')
+        assert_contains(readme, 'align')
+        assert_contains(readme, 'install')
+        assert_contains(readme, 'degradation_metadata')
+    end)
+
     it('makes text target degradation match its declared capabilities', function()
         local capabilities = statuesque.backend_capabilities('text')
         local clicked = false
@@ -1385,6 +1590,7 @@ describe('statuesque render spec', function()
 
         assert_equal(capabilities.highlights, false)
         assert_equal(capabilities.clicks, false)
+        assert_equal(capabilities.hover, false)
         assert_equal(capabilities.align, false)
         assert_equal(rendered, 'leftright')
         assert_equal(clicked, false)
@@ -1409,59 +1615,81 @@ describe('statuesque render spec', function()
     end)
 
     it('uses real Tabulature state render specs in the default tabline when available', function()
-        package.loaded['tabulature'] = nil
-        package.loaded['tabulature.state'] = nil
-        package.loaded['tabulature.render.statuesque'] = nil
-        local previous_tabulature = package.preload['tabulature']
-        local previous_state = package.preload['tabulature.state']
-        local previous_renderer = package.preload['tabulature.render.statuesque']
-        package.preload['tabulature'] = function()
-            return {}
-        end
-        package.preload['tabulature.state'] = function()
-            return {
-                to_tree = function()
-                    return {
-                        kind = 'workspace',
-                        children = {
-                            {
-                                id = 'alpha',
-                                kind = 'tab',
-                                label = 'Alpha',
-                                active = true,
-                                children = {},
+        with_runtimepath('../tabulature.nvim', function()
+            package.loaded['tabulature'] = nil
+            package.loaded['tabulature.state'] = nil
+            package.loaded['tabulature.render.statuesque'] = nil
+            package.loaded['statuesque.widgets.tabulature'] = nil
+            local previous_tabulature = package.preload['tabulature']
+            local previous_state = package.preload['tabulature.state']
+            local previous_renderer = package.preload['tabulature.render.statuesque']
+            package.preload['tabulature'] = function()
+                return {}
+            end
+            package.preload['tabulature.state'] = function()
+                return {
+                    to_tree = function()
+                        return {
+                            kind = 'workspace',
+                            children = {
+                                {
+                                    id = 'alpha',
+                                    kind = 'tab',
+                                    label = 'Alpha',
+                                    active = true,
+                                    children = {},
+                                },
                             },
-                        },
-                    }
-                end,
-            }
-        end
-        package.preload['tabulature.render.statuesque'] = function()
-            return {
-                to_spec = function(root)
-                    assert_equal(root.children[1].label, 'Alpha')
-                    return {
-                        {
-                            text = 'Alpha',
-                            role = 'tab',
-                        },
-                    }
-                end,
-            }
-        end
+                        }
+                    end,
+                }
+            end
+            package.preload['tabulature.render.statuesque'] = function()
+                return {
+                    to_spec = function(root)
+                        assert_equal(root.children[1].label, 'Alpha')
+                        return {
+                            {
+                                text = 'Alpha',
+                                role = 'tab',
+                            },
+                        }
+                    end,
+                }
+            end
 
-        local surfaces = require('statuesque.presets.default').surfaces()
-        local rendered = statuesque.render(surfaces.tabline, 'text')
+            local surfaces = require('statuesque.presets.default').surfaces()
+            local rendered = statuesque.render(surfaces.tabline, 'text')
 
-        package.loaded['tabulature'] = nil
-        package.loaded['tabulature.state'] = nil
-        package.loaded['tabulature.render.statuesque'] = nil
-        package.preload['tabulature'] = previous_tabulature
-        package.preload['tabulature.state'] = previous_state
-        package.preload['tabulature.render.statuesque'] = previous_renderer
+            package.loaded['tabulature'] = nil
+            package.loaded['tabulature.state'] = nil
+            package.loaded['tabulature.render.statuesque'] = nil
+            package.loaded['statuesque.widgets.tabulature'] = nil
+            package.preload['tabulature'] = previous_tabulature
+            package.preload['tabulature.state'] = previous_state
+            package.preload['tabulature.render.statuesque'] = previous_renderer
 
-        assert(rendered:find('𝄞', 1, true), rendered)
-        assert(rendered:find('Alpha', 1, true), rendered)
+            assert(rendered:find('𝄞', 1, true), rendered)
+            assert(rendered:find('Alpha', 1, true), rendered)
+        end)
+    end)
+
+    it('loads external default widgets from runtimepath modules', function()
+        with_runtimepath('tests/fixtures/widget-module', function()
+            package.loaded['statuesque.widgets.git_repo'] = nil
+            local surfaces = require('statuesque.presets.default').surfaces({
+                tabulature = false,
+                status_sigil = '',
+                git_repo_opts = {
+                    icon = 'G',
+                },
+            })
+            local rendered = statuesque.render(surfaces.statusline, 'text')
+
+            package.loaded['statuesque.widgets.git_repo'] = nil
+
+            assert_contains(rendered, 'G external-repo')
+        end)
     end)
 
     it('renders default preset surfaces with distinct visual responsibilities', function()

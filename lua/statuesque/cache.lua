@@ -89,7 +89,7 @@ end
 --- @return T
 function M.get_rendered(target, key, variant, compute)
     if key == nil then
-        return compute()
+        return compute(), false
     end
 
     local by_target = M._rendered[key]
@@ -100,12 +100,12 @@ function M.get_rendered(target, key, variant, compute)
 
     local renderer_key = ('%s:%s'):format(target, variant or 'default')
     if by_target[renderer_key] ~= nil then
-        return by_target[renderer_key]
+        return by_target[renderer_key], true
     end
 
     local rendered = compute()
     by_target[renderer_key] = rendered
-    return rendered
+    return rendered, false
 end
 
 --- Invalidate all cache entries, or entries for a specific key.
