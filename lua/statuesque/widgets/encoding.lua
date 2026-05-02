@@ -1,10 +1,12 @@
 --- @return statuesque.RenderFunction
 return function()
-    return function()
+    return function(context)
+        local ctx = require('statuesque.context')
+        local fileencoding = ctx.buffer_option(context, 'fileencoding')
         return {
             role = 'encoding',
             text = table.concat(
-                { vim.bo.fileencoding ~= '' and vim.bo.fileencoding or vim.o.encoding, vim.bo.fileformat },
+                { fileencoding ~= '' and fileencoding or vim.o.encoding, ctx.buffer_option(context, 'fileformat') },
                 ' '
             ),
         }

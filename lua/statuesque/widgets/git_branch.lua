@@ -2,8 +2,9 @@
 --- @return statuesque.RenderFunction
 return function(opts)
     opts = opts or {}
-    return function()
-        local head = vim.b.gitsigns_head or vim.b.minidiff_summary_string
+    return function(context)
+        local ctx = require('statuesque.context')
+        local head = ctx.buffer_var(context, 'gitsigns_head') or ctx.buffer_var(context, 'minidiff_summary_string')
         if type(head) ~= 'string' or head == '' then
             return false
         end

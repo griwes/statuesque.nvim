@@ -101,6 +101,43 @@ function M.with_target(opts, target)
     return ctx
 end
 
+--- Resolve the buffer for a render context, falling back to the current buffer.
+--- @param opts? statuesque.RenderContext
+--- @return integer
+function M.bufnr(opts)
+    return infer_bufnr(positive_integer(opts and opts.winid), opts) or vim.api.nvim_get_current_buf()
+end
+
+--- Resolve the window for a render context, falling back to the current window.
+--- @param opts? statuesque.RenderContext
+--- @return integer
+function M.winid(opts)
+    return infer_winid(opts and opts.target, opts) or vim.api.nvim_get_current_win()
+end
+
+--- Read a buffer option from the context buffer.
+--- @param opts? statuesque.RenderContext
+--- @param name string
+--- @return any
+function M.buffer_option(opts, name)
+    return vim.bo[M.bufnr(opts)][name]
+end
+
+--- Read a buffer variable from the context buffer.
+--- @param opts? statuesque.RenderContext
+--- @param name string
+--- @return any
+function M.buffer_var(opts, name)
+    return vim.b[M.bufnr(opts)][name]
+end
+
+--- Return the cursor for the context window.
+--- @param opts? statuesque.RenderContext
+--- @return integer[]
+function M.window_cursor(opts)
+    return vim.api.nvim_win_get_cursor(M.winid(opts))
+end
+
 --- @param cache_opts? statuesque.CacheConfig
 --- @param opts? statuesque.RenderContext
 --- @return statuesque.RenderScope

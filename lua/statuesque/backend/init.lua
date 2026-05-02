@@ -1,6 +1,4 @@
-local M = {
-    _registered = {},
-}
+local M = {}
 
 local BUILTIN_CAPABILITIES = {
     debug = {
@@ -136,23 +134,10 @@ local function backend_contract_error(name)
     return ('invalid statuesque backend %q: expected table with render(spec, opts)'):format(name)
 end
 
---- Register a render backend.
---- @param name string
---- @param backend statuesque.Backend
-function M.register(name, backend)
-    assert(type(name) == 'string' and name ~= '', 'backend name must be a non-empty string')
-    assert(is_backend(backend), 'backend must expose render(spec, opts)')
-    M._registered[name] = backend
-end
-
 --- Resolve a render backend by name.
 --- @param name statuesque.Target
 --- @return statuesque.Backend?
 function M.resolve(name)
-    if M._registered[name] ~= nil then
-        return M._registered[name]
-    end
-
     local module_name = BUILTIN[name] or ('statuesque.backend.' .. name)
     local ok, backend = pcall(require, module_name)
     if not ok then
@@ -166,7 +151,6 @@ function M.resolve(name)
         error(backend_contract_error(name))
     end
 
-    M._registered[name] = backend
     return backend
 end
 

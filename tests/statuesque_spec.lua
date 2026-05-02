@@ -26,6 +26,31 @@ local function strip_vim_statusline(actual)
     return tostring(actual):gsub('%%#[^#]-#', ''):gsub('%%%*', '')
 end
 
+local function highlight_hex(value)
+    if value == nil then
+        return nil
+    end
+
+    return ('#%06x'):format(value)
+end
+
+local function rendered_highlight_with_fg(rendered, prefix, fg)
+    for name in tostring(rendered):gmatch('%%#([^#]-)#') do
+        if name:sub(1, #prefix) == prefix then
+            local hl = vim.api.nvim_get_hl(0, { name = name })
+            if highlight_hex(hl.fg) == fg then
+                return {
+                    name = name,
+                    fg = highlight_hex(hl.fg),
+                    bg = highlight_hex(hl.bg),
+                }
+            end
+        end
+    end
+
+    return nil
+end
+
 local function assert_ends_with(actual, expected)
     actual = tostring(actual)
     assert_equal(actual:sub(-#expected), expected)
@@ -40,6 +65,37 @@ end
 local function assert_unpadded_separator(node, glyph)
     assert_equal(#node.children, 1)
     assert_equal(node.children[1].text, glyph)
+end
+
+local function rgb(hex)
+    local value = hex:match('^#?(%x%x%x%x%x%x)$')
+    return tonumber(value:sub(1, 2), 16), tonumber(value:sub(3, 4), 16), tonumber(value:sub(5, 6), 16)
+end
+
+local function channel_spread(hex)
+    local red, green, blue = rgb(hex)
+    return math.max(red, green, blue) - math.min(red, green, blue)
+end
+
+local function relative_channel(value)
+    value = value / 255
+    if value <= 0.03928 then
+        return value / 12.92
+    end
+    return ((value + 0.055) / 1.055) ^ 2.4
+end
+
+local function luminance(hex)
+    local red, green, blue = rgb(hex)
+    return 0.2126 * relative_channel(red) + 0.7152 * relative_channel(green) + 0.0722 * relative_channel(blue)
+end
+
+local function contrast(left, right)
+    local left_luminance = luminance(left)
+    local right_luminance = luminance(right)
+    local lighter = math.max(left_luminance, right_luminance)
+    local darker = math.min(left_luminance, right_luminance)
+    return (lighter + 0.05) / (darker + 0.05)
 end
 
 local function assert_gapped_leading_separator(node, glyph)
@@ -475,6 +531,7 @@ describe('statuesque render spec', function()
                 segment_layout = 'adjacent',
                 sigil = 'N',
                 mode_style = false,
+                palette = false,
                 outer = { fg = '#000000', bg = '#ffffff' },
                 inner = { fg = '#ffffff', bg = '#000000' },
             }),
@@ -496,6 +553,94 @@ describe('statuesque render spec', function()
         assert_equal(debug[5].hl.bg, '#262626')
 
         assert_equal(statuesque.render({ { separator = 'inner' } }, 'text'), '  ')
+    end)
+
+    it('keeps section backgrounds under child foreground highlights', function()
+        vim.api.nvim_set_hl(0, 'StatuesqueFgOnlyChild', {
+            fg = '#112233',
+        })
+
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    { text = 'icon', hl = 'StatuesqueFgOnlyChild' },
+                    { text = ' filetype' },
+                },
+            }, {
+                surface = 'statusline',
+                segment_layout = 'adjacent',
+                sigil = '',
+                mode_style = false,
+                palette = false,
+                semantic_min_contrast = 4.5,
+                outer = { fg = '#000000', bg = '#ffffff' },
+                inner = { fg = '#ffffff', bg = '#000000' },
+            }),
+            'debug'
+        )
+
+        assert_equal(debug[1].children[1].hl.fg, '#112233')
+        assert_equal(debug[1].children[1].hl.bg, '#ffffff')
+        assert_equal(debug[1].children[2].hl.bg, '#ffffff')
+    end)
+
+    it('keeps child foreground-only highlights readable after inheriting section backgrounds', function()
+        vim.api.nvim_set_hl(0, 'StatuesqueUnreadableFgOnlyChild', {
+            fg = '#fefefe',
+        })
+
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    { text = 'icon', hl = 'StatuesqueUnreadableFgOnlyChild' },
+                },
+            }, {
+                surface = 'statusline',
+                segment_layout = 'adjacent',
+                sigil = '',
+                mode_style = false,
+                palette = false,
+                semantic_min_contrast = 4.5,
+                outer = { fg = '#000000', bg = '#ffffff' },
+                inner = { fg = '#ffffff', bg = '#000000' },
+            }),
+            'debug'
+        )
+
+        assert_equal(debug[1].children[1].hl.bg, '#ffffff')
+        assert(debug[1].children[1].hl.fg ~= '#fefefe')
+    end)
+
+    it('preserves foreground hue when repairing inherited section contrast', function()
+        vim.api.nvim_set_hl(0, 'StatuesqueWarmFgOnlyChild', {
+            fg = '#f8c97a',
+        })
+
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    { text = 'warm', hl = 'StatuesqueWarmFgOnlyChild' },
+                },
+            }, {
+                surface = 'statusline',
+                segment_layout = 'adjacent',
+                sigil = '',
+                mode_style = false,
+                palette = false,
+                semantic_min_contrast = 4.5,
+                outer = { fg = '#000000', bg = '#ffffff' },
+                inner = { fg = '#ffffff', bg = '#000000' },
+            }),
+            'debug'
+        )
+        local repaired = debug[1].children[1].hl.fg
+        local red, green, blue = rgb(repaired)
+
+        assert(contrast(repaired, '#ffffff') >= 4.5, repaired)
+        assert(repaired ~= '#1a1b26', repaired)
+        assert(repaired ~= '#000000', repaired)
+        assert(red > blue, repaired)
+        assert(green > blue, repaired)
     end)
 
     it('can compose gapped section islands against the base bar style', function()
@@ -843,11 +988,11 @@ describe('statuesque render spec', function()
         )
 
         assert_equal(debug[1].hl.bg, '#777777')
-        assert_equal(debug[1].hl.fg, '#000000')
+        assert(contrast(debug[1].hl.fg, debug[1].hl.bg) >= 4.5, debug[1].hl.fg)
         assert_equal(debug[3].hl.bg, '#535353')
-        assert_equal(debug[3].hl.fg, '#c0caf5')
+        assert(contrast(debug[3].hl.fg, debug[3].hl.bg) >= 4.5, debug[3].hl.fg)
         assert_equal(debug[5].hl.bg, '#2f2f2f')
-        assert_equal(debug[5].hl.fg, '#c0caf5')
+        assert(contrast(debug[5].hl.fg, debug[5].hl.bg) >= 4.5, debug[5].hl.fg)
     end)
 
     it('lets interpolation endpoints opt into the pure inner style', function()
@@ -885,6 +1030,46 @@ describe('statuesque render spec', function()
 
         assert_equal(debug[1].hl.bg, '#9ece6a')
         assert_equal(debug[1].hl.fg, '#1a1b26')
+    end)
+
+    it('keeps cached Vim fragments reactive to inherited mode backgrounds', function()
+        require('statuesque.cache').invalidate('cached-mode-reactive-child')
+        vim.api.nvim_set_hl(0, 'StatuesqueCachedModeChild', { fg = '#000001' })
+
+        local cached = {
+            cache = { key = 'cached-mode-reactive-child' },
+            render = function()
+                return {
+                    role = 'cached-mode-reactive-child',
+                    children = {
+                        { text = 'ACP', hl = 'StatuesqueCachedModeChild' },
+                    },
+                }
+            end,
+        }
+        local bar = statuesque.compose({ cached }, {
+            surface = 'statusline',
+            sigil = '',
+            palette = { '#000001' },
+        })
+        local prefix = 'StatuesqueModeReactive'
+
+        local normal_rendered = statuesque.render(bar, 'statusline', {
+            mode = 'normal',
+            inline_highlight_prefix = prefix,
+        })
+        local normal_child = rendered_highlight_with_fg(normal_rendered, prefix, '#000001')
+
+        local insert_rendered = statuesque.render(bar, 'statusline', {
+            mode = 'insert',
+            inline_highlight_prefix = prefix,
+        })
+        local insert_child = rendered_highlight_with_fg(insert_rendered, prefix, '#000001')
+
+        assert(normal_child ~= nil, normal_rendered)
+        assert(insert_child ~= nil, insert_rendered)
+        assert_equal(normal_child.bg, '#7aa2f7')
+        assert_equal(insert_child.bg, '#9ece6a')
     end)
 
     it('lets statusline opt out and other surfaces opt in to mode-reactive styles', function()
@@ -932,7 +1117,7 @@ describe('statuesque render spec', function()
         local hl = style.mode_style('insert')
 
         assert_equal(hl.bg, '#777777')
-        assert_equal(hl.fg, '#000000')
+        assert(contrast(hl.fg, hl.bg) >= 4.5, hl.fg)
         assert_equal(hl.bold, true)
         assert_equal(hl.italic, true)
 
@@ -1397,6 +1582,373 @@ describe('statuesque render spec', function()
         assert_equal(rendered[1].statuesque.on_hover, 'unsupported')
     end)
 
+    it('renders window-label widgets from the context buffer', function()
+        local previous_devicons = package.loaded['nvim-web-devicons']
+        package.loaded['nvim-web-devicons'] = {
+            get_icon_color_by_filetype = function(filetype)
+                assert_equal(filetype, 'lua')
+                return '', '#51a0cf'
+            end,
+        }
+
+        local bufnr = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_buf_set_name(bufnr, ('/tmp/statuesque-window-label-%d.lua'):format(bufnr))
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'local label = true' })
+        vim.bo[bufnr].filetype = 'lua'
+        vim.b[bufnr].vgit_status = {
+            added = 2,
+            changed = 3,
+            removed = 1,
+        }
+
+        local rendered = statuesque.render({
+            { name = 'git_diff' },
+            { name = 'filetype', opts = { icon_only = true } },
+            { name = 'filename' },
+        }, 'text', { bufnr = bufnr })
+
+        package.loaded['nvim-web-devicons'] = previous_devicons
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+
+        assert_contains(rendered, ' 2')
+        assert_contains(rendered, ' 3')
+        assert_contains(rendered, ' 1')
+        assert_contains(rendered, '')
+        assert_contains(rendered, ('statuesque-window-label-%d.lua +'):format(bufnr))
+    end)
+
+    it('matches explicit foregrounds against the configured palette and background', function()
+        local matched = style.match_palette_color('#f1c16d', '#101010', {
+            palette = {
+                '#274060',
+                '#f8c97a',
+            },
+        })
+
+        assert_equal(matched, '#f8c97a')
+        assert(contrast(matched, '#101010') >= 4.5)
+    end)
+
+    it('keeps semantic foregrounds instead of replacing them with distant readable palette colors', function()
+        local matched = style.match_palette_color('#61AFEF', '#9d4d5c', {
+            palette = {
+                '#ffffff',
+            },
+        })
+        local red, _, blue = rgb(matched)
+
+        assert(matched ~= '#ffffff', matched)
+        assert(blue > red, matched)
+        assert(contrast(matched, '#9d4d5c') >= 4.5, matched)
+    end)
+
+    it('still accepts nearby palette colors that preserve the source color identity', function()
+        local matched = style.match_palette_color('#61AFEF', '#1f2335', {
+            palette = {
+                '#7dcfff',
+                '#ffffff',
+            },
+        })
+
+        assert_equal(matched, '#7dcfff')
+    end)
+
+    it('uses semantic contrast for explicit child foreground accents on mode backgrounds', function()
+        vim.api.nvim_set_hl(0, 'StatuesqueSemanticBlue', {
+            fg = '#61AFEF',
+        })
+
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    { text = 'ACP', hl = 'StatuesqueSemanticBlue' },
+                },
+            }, {
+                surface = 'statusline',
+                segment_layout = 'adjacent',
+                sigil = '',
+                mode_style = false,
+                palette = {
+                    '#ffffff',
+                },
+                outer = { fg = '#ffffff', bg = '#9d4d5c' },
+                inner = { fg = '#ffffff', bg = '#9d4d5c' },
+            }),
+            'debug'
+        )
+
+        local matched = debug[1].children[1].hl.fg
+        local red, _, blue = rgb(matched)
+
+        assert(matched ~= '#ffffff', matched)
+        assert(blue > red, matched)
+        assert(contrast(matched, '#9d4d5c') >= 3.5, matched)
+    end)
+
+    it('uses dark semantic accent variants on light replace backgrounds', function()
+        vim.api.nvim_set_hl(0, 'StatuesqueSemanticReplaceBlue', {
+            fg = '#61AFEF',
+        })
+        vim.api.nvim_set_hl(0, 'StatuesqueSemanticReplaceYellow', {
+            fg = '#E5C07B',
+        })
+
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    { text = 'ACP', hl = 'StatuesqueSemanticReplaceBlue' },
+                    { text = 'idle', hl = 'StatuesqueSemanticReplaceYellow' },
+                },
+            }, {
+                surface = 'statusline',
+                segment_layout = 'adjacent',
+                sigil = '',
+                mode_style = false,
+                palette = {
+                    '#ffffff',
+                },
+                outer = { fg = '#ffffff', bg = '#f7768e' },
+                inner = { fg = '#ffffff', bg = '#f7768e' },
+            }),
+            'debug'
+        )
+
+        local matched = debug[1].children[1].hl.fg
+        local red, green, blue = rgb(matched)
+
+        assert(matched ~= '#ffffff', matched)
+        assert(blue > red and blue > green, matched)
+        assert(luminance(matched) < luminance('#f7768e'), matched)
+        assert(channel_spread(matched) >= 60, matched)
+        assert(contrast(matched, '#f7768e') >= 3.5, matched)
+
+        local warm = debug[1].children[2].hl.fg
+        local warm_red, warm_green, warm_blue = rgb(warm)
+        assert(warm ~= '#ffffff', warm)
+        assert(warm_red > warm_blue and warm_green > warm_blue, warm)
+        assert(luminance(warm) < luminance('#f7768e'), warm)
+        assert(channel_spread(warm) >= 60, warm)
+        assert(contrast(warm, '#f7768e') >= 3.5, warm)
+    end)
+
+    it('applies one semantic repair direction across explicit widget accents', function()
+        local background = '#f7768e'
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    { text = 'ACP', hl = { fg = '#61AFEF' } },
+                    { text = 'idle', hl = { fg = '#98C379' } },
+                    { text = 'err', hl = { fg = '#E06C75' } },
+                },
+            }, {
+                surface = 'statusline',
+                segment_layout = 'adjacent',
+                sigil = '',
+                mode_style = false,
+                palette = false,
+                outer = { fg = '#ffffff', bg = background },
+                inner = { fg = '#ffffff', bg = background },
+            }),
+            'debug'
+        )
+
+        for _, child in ipairs(debug[1].children) do
+            local matched = child.hl.fg
+            assert(luminance(matched) < luminance(background), matched)
+            assert(contrast(matched, background) >= 3.5, matched)
+        end
+    end)
+
+    it('uses palette colors as candidates for aggregate semantic repairs', function()
+        local background = '#f7768e'
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    { text = 'ACP', hl = { fg = '#61AFEF' } },
+                },
+            }, {
+                surface = 'statusline',
+                segment_layout = 'adjacent',
+                sigil = '',
+                mode_style = false,
+                palette = {
+                    '#003f7f',
+                    '#ffffff',
+                },
+                outer = { fg = '#ffffff', bg = background },
+                inner = { fg = '#ffffff', bg = background },
+            }),
+            'debug'
+        )
+
+        assert_equal(debug[1].children[1].hl.fg, '#003f7f')
+    end)
+
+    it('derives the default palette from common highlight groups', function()
+        vim.api.nvim_set_hl(0, 'String', { fg = '#f8c97a' })
+
+        local matched = style.match_palette_color('#f8c97a', '#101010')
+
+        assert_equal(matched, '#f8c97a')
+    end)
+
+    it('uses the Statuesque palette as a devicon color harmony hint', function()
+        local previous_devicons = package.loaded['nvim-web-devicons']
+        local config = require('statuesque.config')
+        local previous_config = vim.deepcopy(config.config)
+
+        package.loaded['nvim-web-devicons'] = {
+            get_icon_color_by_filetype = function()
+                return '', '#51a0cf'
+            end,
+        }
+        config.configure({ palette = { '#f8c97a' } })
+
+        local bufnr = vim.api.nvim_create_buf(true, false)
+        vim.bo[bufnr].filetype = 'lua'
+        local debug = statuesque.render({ name = 'filetype', opts = { icon_only = true } }, 'debug', { bufnr = bufnr })
+
+        package.loaded['nvim-web-devicons'] = previous_devicons
+        config.config = previous_config
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+
+        assert_equal(debug[1].hl, 'StatuesqueFileIconf8c97a')
+    end)
+
+    it('lets the default preset drive incline window-label rendering', function()
+        local previous_incline = package.loaded.incline
+        local setup_opts
+        package.loaded.incline = {
+            setup = function(opts)
+                setup_opts = opts
+            end,
+        }
+
+        local bufnr = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_buf_set_name(bufnr, ('/tmp/statuesque-incline-label-%d.lua'):format(bufnr))
+        vim.bo[bufnr].filetype = 'lua'
+
+        require('statuesque.presets.default').install({
+            preset = {
+                'default',
+                opts = {
+                    tabulature = false,
+                },
+            },
+            surfaces = {
+                window_label = {
+                    backend = {
+                        name = 'incline',
+                        opts = {
+                            window = {
+                                zindex = 1,
+                            },
+                        },
+                    },
+                },
+            },
+        })
+
+        local rendered = setup_opts.render({ winid = vim.api.nvim_get_current_win(), buf = bufnr })
+
+        package.loaded.incline = previous_incline
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+
+        assert_equal(setup_opts.window.zindex, 1)
+        assert_contains(vim.inspect(rendered), ('statuesque-incline-label-%d.lua'):format(bufnr))
+    end)
+
+    it('rejects incline surfaces with both left and right widget runs', function()
+        local ok, err = pcall(function()
+            require('statuesque.presets.default').surfaces({
+                preset = false,
+                surfaces = {
+                    window_label = {
+                        left = { 'left' },
+                        right = { 'right' },
+                        backend = 'incline',
+                    },
+                },
+            })
+        end)
+
+        assert_equal(ok, false)
+        assert_contains(err, 'cannot define both left and right for incline backend')
+    end)
+
+    it('rejects multiple surfaces targeting the same backend target', function()
+        local ok, err = pcall(function()
+            require('statuesque.presets.default').surfaces({
+                preset = false,
+                surfaces = {
+                    one = {
+                        left = { 'one' },
+                        backend = 'statusline',
+                    },
+                    two = {
+                        left = { 'two' },
+                        backend = 'statusline',
+                    },
+                },
+            })
+        end)
+
+        assert_equal(ok, false)
+        assert_contains(err, 'both render to backend statusline target statusline')
+    end)
+
+    it('rejects backend targets unless capabilities explicitly allow them', function()
+        local ok, err = pcall(function()
+            require('statuesque.presets.default').surfaces({
+                preset = false,
+                surfaces = {
+                    status = {
+                        left = { 'status' },
+                        backend = {
+                            name = 'statusline',
+                            target = 'statusline',
+                        },
+                    },
+                },
+            })
+        end)
+
+        assert_equal(ok, false)
+        assert_contains(err, 'backend statusline does not support target statusline')
+    end)
+
+    it('allows backend targets declared by backend capabilities', function()
+        package.loaded['statuesque.backend.targeted_backend'] = nil
+        package.preload['statuesque.backend.targeted_backend'] = function()
+            return {
+                capabilities = {
+                    targets = { 'statusline' },
+                },
+                render = function(render_spec)
+                    return statuesque.render(render_spec, 'text')
+                end,
+            }
+        end
+
+        local surfaces = require('statuesque.presets.default').surfaces({
+            preset = false,
+            surfaces = {
+                status = {
+                    left = { 'status' },
+                    backend = {
+                        name = 'targeted_backend',
+                        target = 'statusline',
+                    },
+                },
+            },
+        })
+
+        package.preload['statuesque.backend.targeted_backend'] = nil
+        package.loaded['statuesque.backend.targeted_backend'] = nil
+
+        assert_contains(statuesque.render(surfaces.status, 'text'), 'status')
+    end)
+
     it('isolates cached Incline table output from consumer mutation', function()
         local cached = {
             id = 'cached-incline-table',
@@ -1453,19 +2005,23 @@ describe('statuesque render spec', function()
         vim.g.statusline_winid = previous_statusline_winid
     end)
 
-    it('routes custom render targets through the backend registry', function()
-        statuesque.register_backend('demo-backend', {
-            render = function(render_spec)
-                return 'demo:' .. statuesque.render(render_spec, 'text')
-            end,
-        })
+    it('routes custom render targets through runtimepath backend discovery', function()
+        package.loaded['statuesque.backend.demo_backend'] = nil
+        package.preload['statuesque.backend.demo_backend'] = function()
+            return {
+                render = function(render_spec)
+                    return 'demo:' .. statuesque.render(render_spec, 'text')
+                end,
+            }
+        end
 
-        assert_equal(statuesque.render({ 'ok' }, 'demo-backend'), 'demo:ok')
+        assert_equal(statuesque.render({ 'ok' }, 'demo_backend'), 'demo:ok')
+
+        package.preload['statuesque.backend.demo_backend'] = nil
+        package.loaded['statuesque.backend.demo_backend'] = nil
     end)
 
     it('loads custom backend modules from runtimepath-style lua paths', function()
-        local backend = require('statuesque.backend')
-        backend._registered.runtime_fixture = nil
         package.loaded['statuesque.backend.runtime_fixture'] = nil
 
         with_runtimepath('tests/fixtures/runtime-backend', function()
@@ -1481,7 +2037,6 @@ describe('statuesque render spec', function()
             assert_equal(capabilities.hover_degradation, 'metadata')
         end)
 
-        backend._registered.runtime_fixture = nil
         package.loaded['statuesque.backend.runtime_fixture'] = nil
     end)
 
@@ -1534,20 +2089,26 @@ describe('statuesque render spec', function()
     end)
 
     it('preserves custom backend capabilities', function()
-        statuesque.register_backend('capability-demo', {
-            capabilities = {
-                highlights = true,
-                clicks = false,
-                custom_surface = true,
-            },
-            render = function(render_spec)
-                return statuesque.render(render_spec, 'text')
-            end,
-        })
+        package.loaded['statuesque.backend.capability_demo'] = nil
+        package.preload['statuesque.backend.capability_demo'] = function()
+            return {
+                capabilities = {
+                    highlights = true,
+                    clicks = false,
+                    custom_surface = true,
+                },
+                render = function(render_spec)
+                    return statuesque.render(render_spec, 'text')
+                end,
+            }
+        end
 
-        local capabilities = statuesque.backend_capabilities('capability-demo')
+        local capabilities = statuesque.backend_capabilities('capability_demo')
 
-        assert_equal(capabilities.target, 'capability-demo')
+        package.preload['statuesque.backend.capability_demo'] = nil
+        package.loaded['statuesque.backend.capability_demo'] = nil
+
+        assert_equal(capabilities.target, 'capability_demo')
         assert_equal(capabilities.highlights, true)
         assert_equal(capabilities.clicks, false)
         assert_equal(capabilities.custom_surface, true)
@@ -1599,8 +2160,11 @@ describe('statuesque render spec', function()
     it('installs the default preset on demand without manifold wiring', function()
         statuesque.setup({
             manifold = false,
-            preset = {
-                status_sigil = 'S',
+            preset = 'default',
+            surfaces = {
+                statusline = {
+                    sigil = 'S',
+                },
             },
         })
 
@@ -1678,10 +2242,19 @@ describe('statuesque render spec', function()
         with_runtimepath('tests/fixtures/widget-module', function()
             package.loaded['statuesque.widgets.git_repo'] = nil
             local surfaces = require('statuesque.presets.default').surfaces({
-                tabulature = false,
-                status_sigil = '',
-                git_repo_opts = {
-                    icon = 'G',
+                preset = {
+                    'default',
+                    opts = {
+                        tabulature = false,
+                        git_repo = {
+                            icon = 'G',
+                        },
+                    },
+                },
+                surfaces = {
+                    statusline = {
+                        sigil = '',
+                    },
                 },
             })
             local rendered = statuesque.render(surfaces.statusline, 'text')
@@ -1692,35 +2265,155 @@ describe('statuesque render spec', function()
         end)
     end)
 
+    it('renders breadcrumbs from buffer-local producer state', function()
+        local bufnr = vim.api.nvim_get_current_buf()
+        vim.b[bufnr].statuesque_breadcrumbs = {
+            'Module',
+            { text = 'Function' },
+        }
+
+        local rendered = statuesque.render({
+            name = 'breadcrumbs',
+            opts = {
+                separator = ' / ',
+            },
+        }, 'winbar', { bufnr = bufnr })
+
+        vim.b[bufnr].statuesque_breadcrumbs = nil
+
+        assert_equal(rendered, 'Module / Function')
+    end)
+
+    it('renders breadcrumbs from nvim-navic when available', function()
+        local previous_navic = package.loaded['nvim-navic']
+        local seen_bufnr
+        package.loaded['nvim-navic'] = {
+            is_available = function(bufnr)
+                seen_bufnr = bufnr
+                return true
+            end,
+            get_location = function(opts)
+                return 'Root' .. opts.separator .. 'Leaf'
+            end,
+        }
+
+        local bufnr = vim.api.nvim_get_current_buf()
+        local rendered = statuesque.render({
+            name = 'breadcrumbs',
+            opts = {
+                separator = ' > ',
+            },
+        }, 'winbar', { bufnr = bufnr })
+
+        package.loaded['nvim-navic'] = previous_navic
+
+        assert_equal(seen_bufnr, bufnr)
+        assert_equal(rendered, 'Root > Leaf')
+    end)
+
+    it('attaches nvim-navic to existing document-symbol LSP clients', function()
+        local previous_navic = package.loaded['nvim-navic']
+        local previous_get_clients = vim.lsp.get_clients
+        local bufnr = vim.api.nvim_get_current_buf()
+        local attached = {}
+
+        package.loaded['nvim-navic'] = {
+            attach = function(client, attach_bufnr)
+                attached[#attached + 1] = { client = client, bufnr = attach_bufnr }
+            end,
+            is_available = function()
+                return true
+            end,
+            get_location = function()
+                return 'Root > Leaf'
+            end,
+        }
+        vim.lsp.get_clients = function(opts)
+            assert_equal(opts.bufnr, bufnr)
+            return {
+                {
+                    id = 997,
+                    name = 'symbols',
+                    server_capabilities = {
+                        documentSymbolProvider = true,
+                    },
+                },
+                {
+                    id = 998,
+                    name = 'no-symbols',
+                    server_capabilities = {},
+                },
+            }
+        end
+
+        local rendered = statuesque.render({
+            name = 'breadcrumbs',
+        }, 'winbar', { bufnr = bufnr })
+
+        package.loaded['nvim-navic'] = previous_navic
+        vim.lsp.get_clients = previous_get_clients
+
+        assert_equal(rendered, 'Root > Leaf')
+        assert_equal(#attached, 1)
+        assert_equal(attached[1].client.name, 'symbols')
+        assert_equal(attached[1].bufnr, bufnr)
+    end)
+
     it('renders default preset surfaces with distinct visual responsibilities', function()
+        local previous_navic = package.loaded['nvim-navic']
+        package.loaded['nvim-navic'] = {
+            is_available = function()
+                return true
+            end,
+            get_location = function()
+                return 'Module > Function'
+            end,
+        }
+
         local surfaces = require('statuesque.presets.default').surfaces({
-            tabulature = false,
-            status_sigil = 'S',
-            tabline_sigil = 'T',
-            winbar_sigil = 'W',
+            preset = {
+                'default',
+                opts = {
+                    tabulature = false,
+                },
+            },
+            surfaces = {
+                statusline = { sigil = 'S' },
+                tabline = { sigil = 'T' },
+                winbar = { sigil = 'W' },
+            },
         })
 
         local statusline = statuesque.render(surfaces.statusline, 'text', { mode = 'normal' })
         local tabline = statuesque.render(surfaces.tabline, 'text')
         local winbar = statuesque.render(surfaces.winbar, 'text')
 
+        package.loaded['nvim-navic'] = previous_navic
+
         assert(statusline:find('S', 1, true), statusline)
         assert(statusline:find('NORMAL', 1, true), statusline)
-        assert(statusline:find('[No Name]', 1, true), statusline)
+        assert(not statusline:find('[No Name]', 1, true), statusline)
         assert(statusline:find('utf-8 unix', 1, true), statusline)
         assert(tabline:find('T', 1, true), tabline)
         assert(tabline:find('statuesque.nvim', 1, true), tabline)
         assert(winbar:find('W', 1, true), winbar)
-        assert(winbar:find('[No Name]', 1, true), winbar)
+        assert(winbar:find('Module > Function', 1, true), winbar)
     end)
 
     it('uses gapped segment layout in the default preset', function()
         local surfaces = require('statuesque.presets.default').surfaces({
-            tabulature = false,
+            preset = {
+                'default',
+                opts = {
+                    tabulature = false,
+                },
+            },
             gap_padding = '',
-            status_sigil = '',
-            tabline_sigil = '',
-            winbar_sigil = '',
+            surfaces = {
+                statusline = { sigil = '' },
+                tabline = { sigil = '' },
+                winbar = { sigil = '' },
+            },
         })
 
         local statusline = statuesque.render(surfaces.statusline, 'debug', { mode = 'normal' })
@@ -1730,6 +2423,60 @@ describe('statuesque render spec', function()
         assert_gapped_leading_separator(statusline[1], '')
         assert_equal(tabline[1].role, 'segment-leading-separator')
         assert_gapped_leading_separator(tabline[1], '')
+    end)
+
+    it('applies top-level visual options to preset surfaces', function()
+        local surfaces = require('statuesque.presets.default').surfaces({
+            preset = {
+                'default',
+                opts = {
+                    tabulature = false,
+                },
+            },
+            style = 'capsule',
+            surfaces = {
+                statusline = { sigil = '' },
+            },
+        })
+
+        local debug = statuesque.render(surfaces.statusline, 'debug', { mode = 'normal' })
+
+        assert_equal(debug[1].role, 'segment-leading-separator')
+        assert_unpadded_separator(debug[1], '')
+    end)
+
+    it('lets surface overrides disable preset surfaces', function()
+        local surfaces = require('statuesque.presets.default').surfaces({
+            preset = {
+                'default',
+                opts = {
+                    tabulature = false,
+                },
+            },
+            surfaces = {
+                winbar = {
+                    enabled = false,
+                },
+            },
+        })
+
+        assert(surfaces.statusline ~= nil)
+        assert_equal(surfaces.winbar, nil)
+    end)
+
+    it('rejects unnamed preset tables', function()
+        local ok, err = pcall(function()
+            require('statuesque.presets.default').surfaces({
+                preset = {
+                    opts = {
+                        tabulature = false,
+                    },
+                },
+            })
+        end)
+
+        assert_equal(ok, false)
+        assert_contains(err, 'must name the preset as the first array item')
     end)
 
     it('fails explicitly for unsupported render and install targets', function()

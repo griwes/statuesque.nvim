@@ -2,6 +2,7 @@ local cache = require('statuesque.cache')
 local clicks = require('statuesque.clicks')
 local context = require('statuesque.context')
 local hovers = require('statuesque.hovers')
+local render_variant = require('statuesque.render.variant')
 local spec = require('statuesque.spec')
 local style = require('statuesque.style')
 
@@ -14,36 +15,31 @@ local function escape_text(text)
     return escaped
 end
 
---- @param value any
---- @return string
-local function encode_variant_value(value)
-    value = tostring(value or '')
-    return ('%d:%s'):format(#value, value)
-end
-
 --- @param ctx statuesque.RenderContext
 --- @return string
 local function defaults_variant(ctx)
     local defaults = ctx.backend_defaults or {}
     return table.concat({
-        encode_variant_value(defaults.left_separator),
-        encode_variant_value(defaults.right_separator),
-        encode_variant_value(defaults.inner_left_separator),
-        encode_variant_value(defaults.inner_right_separator),
-        encode_variant_value(defaults.separator_padding),
-        encode_variant_value(defaults.side),
+        render_variant.encode_value(defaults.left_separator),
+        render_variant.encode_value(defaults.right_separator),
+        render_variant.encode_value(defaults.inner_left_separator),
+        render_variant.encode_value(defaults.inner_right_separator),
+        render_variant.encode_value(defaults.separator_padding),
+        render_variant.encode_value(defaults.side),
     }, '|')
 end
 
 --- @param ctx statuesque.RenderContext
+--- @param node statuesque.NormalizedNode
 --- @return string
-local function variant_key(ctx)
-    return ('side=%s,separator_side=%s,inline=%s,inline_start=%d,defaults=%s'):format(
+local function variant_key(ctx, node)
+    return ('side=%s,separator_side=%s,inline=%s,inline_start=%d,defaults=%s,hl=%s'):format(
         ctx.side or '',
         ctx.separator_side or '',
         ctx.inline_highlight_prefix or '',
         ctx.inline_highlight_index or 0,
-        defaults_variant(ctx)
+        defaults_variant(ctx),
+        render_variant.node_highlights(node)
     )
 end
 
@@ -163,23 +159,28 @@ function render_node(node, ctx)
     local inline_highlight_start = ctx.inline_highlight_index
     local inline_definition_start = #ctx.inline_highlight_definitions
     --- @type { rendered: string, inline_highlight_count?: integer, inline_highlight_definitions?: { name: string, hl: statuesque.HighlightSpec }[], hover_width?: integer, hover_spans?: table[] }
-    local record, from_cache = cache.get_rendered(ctx.target, node._statuesque_cache_key, variant_key(ctx), function()
-        local rendered = render_node_uncached(node, ctx)
-        local inline_highlight_count = ctx.inline_highlight_index - inline_highlight_start
-        local definitions = {}
+    local record, from_cache = cache.get_rendered(
+        ctx.target,
+        node._statuesque_cache_key,
+        variant_key(ctx, node),
+        function()
+            local rendered = render_node_uncached(node, ctx)
+            local inline_highlight_count = ctx.inline_highlight_index - inline_highlight_start
+            local definitions = {}
 
-        for index = inline_definition_start + 1, #ctx.inline_highlight_definitions do
-            definitions[#definitions + 1] = ctx.inline_highlight_definitions[index]
+            for index = inline_definition_start + 1, #ctx.inline_highlight_definitions do
+                definitions[#definitions + 1] = ctx.inline_highlight_definitions[index]
+            end
+
+            return {
+                rendered = rendered,
+                inline_highlight_count = inline_highlight_count,
+                inline_highlight_definitions = definitions,
+                hover_width = (ctx._statuesque_hover_col or hover_start_col) - hover_start_col,
+                hover_spans = hovers.capture_relative(ctx, hover_span_start, hover_start_col),
+            }
         end
-
-        return {
-            rendered = rendered,
-            inline_highlight_count = inline_highlight_count,
-            inline_highlight_definitions = definitions,
-            hover_width = (ctx._statuesque_hover_col or hover_start_col) - hover_start_col,
-            hover_spans = hovers.capture_relative(ctx, hover_span_start, hover_start_col),
-        }
-    end)
+    )
 
     if type(record) ~= 'table' or record.rendered == nil then
         return tostring(record or '')

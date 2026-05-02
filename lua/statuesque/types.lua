@@ -134,6 +134,7 @@
 --- @field align? boolean|'preserved'|string
 --- @field raw? boolean|'preserved'|string
 --- @field install? boolean
+--- @field targets? string[]|table<string, boolean>
 --- @field global_statusline? boolean
 --- @field render_scope? statuesque.RenderScope
 --- @field window_context? boolean
@@ -181,10 +182,15 @@
 --- @field mode? string
 --- @field min_contrast? number
 --- @field minimum_contrast? number
+--- @field semantic_min_contrast? number Minimum contrast for explicit child foreground accents. Defaults lower than generated text to preserve color identity.
+--- @field accent_min_contrast? number Alias for semantic_min_contrast.
+--- @field semantic_background? 'dark'|'light' Override for semantic repair bias. Defaults to `vim.o.background`.
 --- @field readable_dark? string
 --- @field readable_light? string
 --- @field hard_readable_dark? string
 --- @field hard_readable_light? string
+--- @field palette? false|string[]|table<string, string>|fun(): string[]|table<string, string> Foreground harmony palette. Defaults to common highlight groups.
+--- @field palette_distance_tolerance? number Maximum perceptual distance for preferring a palette color over an already-readable source foreground.
 --- @field backend_defaults? statuesque.BackendDefaults
 --- @field side? statuesque.Side
 --- @field separator_side? statuesque.Side
@@ -210,23 +216,44 @@
 --- @class statuesque.Config
 --- @field targets? table<string, statuesque.TargetConfig>
 --- @field style? statuesque.StyleName
---- @field preset? boolean|statuesque.PresetOptions
+--- @field palette? false|string[]|table<string, string>|fun(): string[]|table<string, string> Colors used to harmonize explicit child foregrounds with the active colorscheme.
+--- @field preset? boolean|string|statuesque.PresetReference
+--- @field surfaces? table<string, statuesque.SurfaceConfig|false>
 --- @field manifold? boolean|statuesque.ManifoldAutoOptions
 --- @field publish? statuesque.PublishConfig
 
 --- @alias statuesque.SetupConfig statuesque.Config
 --- @alias statuesque.Provider statuesque.RenderSpec|fun(context?: statuesque.RenderContext): statuesque.RenderSpec
 
---- @class statuesque.PresetOptions: statuesque.ComposeOptions
+--- @class statuesque.PresetReference
+--- @field [1]? string
+--- @field opts? statuesque.PresetOptions
+
+--- @class statuesque.PresetOptions
 --- @field tabulature? boolean
---- @field status_icon? string
---- @field status_sigil? string|false
---- @field tabline_sigil? string|false
---- @field winbar_sigil? string|false
---- @field tabulature_opts? table
---- @field git_repo_opts? table
---- @field widgets? table<string, statuesque.ComposeInput>
+--- @field mode? statuesque.WidgetModeOptions
+--- @field tabulature_widget? table
+--- @field git_repo? table
+--- @field breadcrumbs? statuesque.WidgetBreadcrumbsOptions
 --- @field tabline_cwd_max_width? integer
+
+--- @class statuesque.SurfaceConfig: statuesque.ComposeOptions
+--- @field left? statuesque.RenderSpec[]
+--- @field right? statuesque.RenderSpec[]
+--- @field backend? string|false|statuesque.SurfaceBackendConfig|statuesque.SurfaceBackendConfig[]
+--- @field sigil? string|false
+--- @field enabled? boolean
+--- @field [integer] statuesque.RenderSpec
+
+--- @class statuesque.SurfaceBackendConfig
+--- @field name? string
+--- @field target? string
+--- @field opts? table
+
+--- @class statuesque.InclineIntegrationOptions
+--- @field enabled? boolean
+--- @field surface? string
+--- @field opts? table
 
 --- @class statuesque.WidgetModeOptions
 --- @field icon? string
@@ -240,6 +267,7 @@
 
 --- @class statuesque.WidgetDiagnosticsOptions
 --- @field labels? table<integer, string>
+--- @field signs? boolean
 --- @field empty? boolean
 --- @field empty_text? string
 
@@ -247,9 +275,33 @@
 --- @field icon? string
 --- @field max_width? integer
 
+--- @class statuesque.WidgetFiletypeOptions
+--- @field icon? string|boolean
+--- @field icon_only? boolean
+--- @field icon_separator? string
+--- @field devicons? boolean
+
 --- @class statuesque.WidgetCwdOptions
 --- @field path? string
 --- @field max_width? integer
+
+--- @class statuesque.WidgetGitDiffOptions
+--- @field labels? table<string, string>
+--- @field highlights? table<string, string>
+--- @field empty? boolean
+--- @field empty_text? string
+
+--- @class statuesque.WidgetBreadcrumbsOptions
+--- @field provider? fun(context?: statuesque.RenderContext): statuesque.RenderSpec
+--- @field separator? string
+--- @field max_width? integer
+--- @field truncate? statuesque.TruncateMode
+--- @field empty? boolean
+--- @field empty_text? string
+--- @field navic? boolean
+--- @field auto_attach? boolean Automatically attach `nvim-navic` to document-symbol LSP clients.
+--- @field depth_limit? integer
+--- @field depth_limit_indicator? string
 
 --- @class statuesque.ManifoldHostOptions
 --- @field surface? string

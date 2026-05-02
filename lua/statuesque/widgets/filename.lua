@@ -2,8 +2,10 @@
 --- @return statuesque.RenderFunction
 return function(opts)
     opts = opts or {}
-    return function()
-        local name = vim.api.nvim_buf_get_name(vim.api.nvim_get_current_buf())
+    return function(context)
+        local ctx = require('statuesque.context')
+        local bufnr = ctx.bufnr(context)
+        local name = vim.api.nvim_buf_get_name(bufnr)
         if name == '' then
             name = '[No Name]'
         else
@@ -11,10 +13,10 @@ return function(opts)
         end
 
         local flags = ''
-        if vim.bo.modified then
+        if ctx.buffer_option(context, 'modified') then
             flags = flags .. (opts.modified_text or ' +')
         end
-        if vim.bo.readonly then
+        if ctx.buffer_option(context, 'readonly') then
             flags = flags .. (opts.readonly_text or ' RO')
         end
 

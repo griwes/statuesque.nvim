@@ -89,17 +89,67 @@ Tabulature, or Manifold state.
 ```lua
 require('statuesque').setup({
     manifold = false,
-    preset = true,
+    preset = 'default',
+    surfaces = {
+        statusline = {
+            left = {
+                { name = 'mode' },
+                { name = 'diagnostics', opts = { empty = false } },
+                { name = 'git_repo', optional = true },
+            },
+            right = {
+                { name = 'filetype' },
+                { name = 'encoding' },
+                { name = 'location' },
+                { name = 'progress' },
+            },
+        },
+        window_label = {
+            left = {
+                { name = 'filetype', opts = { icon_only = true } },
+                { name = 'filename', opts = { max_width = 48 } },
+            },
+            backend = {
+                name = 'incline',
+                opts = {
+                    window = {
+                        placement = { vertical = 'bottom' },
+                    },
+                },
+            },
+        },
+    },
 })
 ```
 
 The default preset installs a global statusline, tabline, and winbar. It uses a
 section-style layout with interpolated styles instead of lualine's strict
-`a/b/c/x/y/z` segment model. Built-in widgets cover mode, filename, diagnostics,
-git branch, filetype, location, progress, cwd, and hostname. Other plugins can
-ship default-preset widgets, such as Tabulature's tabline component or Stratum's
-live repository component, by adding `lua/statuesque/widgets/*.lua` modules to
+`a/b/c/x/y/z` segment model. Built-in widgets cover mode, filename,
+breadcrumbs, diagnostics, git branch, Git diff, filetype, location, progress,
+cwd, and hostname. The default global statusline intentionally does not include the
+current buffer filename; buffer identity belongs on window-local label surfaces,
+while the winbar defaults to breadcrumbs/navigation context. The breadcrumbs
+widget reads a buffer-local `vim.b.statuesque_breadcrumbs` value or delegates to
+`nvim-navic`. When `nvim-navic` is present, the widget automatically attaches it
+to document-symbol LSP clients, so user config only needs to install/configure
+`nvim-navic` and select the breadcrumbs widget. Other plugins can ship
+default-preset widgets, such as Tabulature's tabline component or Stratum's live
+repository component, by adding `lua/statuesque/widgets/*.lua` modules to
 runtimepath without moving their state logic into Statuesque.
+
+Preset-specific widget options live under the preset selector:
+
+```lua
+require('statuesque').setup({
+    preset = {
+        'default',
+        opts = {
+            git_repo = { icon = 'G' },
+            breadcrumbs = { max_width = 80 },
+        },
+    },
+})
+```
 
 `statuesque.compose()` accepts either a simple component list or explicit
 `{ left = {...}, right = {...} }` sections. Right sections are separated with
@@ -115,6 +165,24 @@ Interpolated section styles enforce readable foreground/background contrast;
 set `min_contrast` on the compose options to tune the threshold. When a
 generated foreground is unreadable, Statuesque first tries softer dark/light
 fallbacks before falling back to pure black or white.
+Explicit child foregrounds, such as plugin-owned status colors or devicon
+colors, are first matched to a Statuesque palette and then checked against the
+inherited section background. Set `palette` at top-level setup or per compose
+call to a list/map/function of `#rrggbb` colors. When no palette is configured,
+Statuesque derives one from common highlight groups in the active colorscheme;
+set `palette = false` to disable palette harmonization for a render.
+Palette colors only replace a semantic foreground when they are perceptually
+close enough to preserve the source color identity; otherwise Statuesque repairs
+the original foreground toward a readable color with the same hue. Tune that
+boundary with `palette_distance_tolerance`. Explicit child foregrounds use
+`semantic_min_contrast` (default `3.5`) instead of the stricter generated-text
+threshold, because many semantic accents cannot retain their color identity on
+mode-reactive backgrounds at `4.5` contrast. Semantic foreground repair builds
+exact, darker, and lighter candidate sets from both same-hue repairs and the
+active palette, then picks one aggregate direction for a sibling widget run from
+coverage, worst/best/average contrast, source-color identity, and congruence
+with the editor background. Set `semantic_background = 'dark'` or `'light'` to
+override the `vim.o.background` bias used by that scoring.
 Statusline composition uses the current editor mode as its outer section style
 by default; set `mode_style = false` to opt out. Other surfaces can opt in with
 `mode_style = true` or a specific mode name. Mode styles are derived from
@@ -128,6 +196,14 @@ highlight palette.
 When `tabulature.nvim` is present, the default tabline consumes Tabulature's
 Statuesque render specs and keeps the current working directory as right-side
 context. Without Tabulature, the tabline falls back to a compact cwd bar.
+The default preset also exposes a `window_label` surface for Incline-backed
+per-window labels. When `incline.nvim` is installed, Statuesque can configure it
+from `surfaces.window_label.backend` and render buffer-local identity from
+Statuesque widgets instead of requiring a custom Incline render function in user
+config. Surface configs use `left` and `right` widget runs. If no backend is
+specified, a surface installs to the backend with the same name. Backends that
+support only one side, such as `incline`, reject surfaces that define both
+`left` and `right`.
 Vim statusline-family targets lower the semantic alignment marker to `%=`.
 Incline-style separators can be oriented with `{ side = 'left' }` or
 `{ side = 'right' }` render/backend options.
@@ -161,34 +237,21 @@ end)
 statuesque.set_surface('tabline', 'domains')
 statuesque.install_surface('tabline', 'tabline')
 
+local window_label = statuesque.render_surface('window_label', 'incline', {
+    winid = vim.api.nvim_get_current_win(),
+    bufnr = vim.api.nvim_get_current_buf(),
+})
+
 local capabilities = statuesque.backend_capabilities('statusline')
 ```
 
 ## Backend Authoring
 
-Backends translate normalized render specs into a concrete target shape. A
-backend may be registered at runtime:
-
-```lua
-statuesque.register_backend('custom', {
-    capabilities = {
-        render_scope = 'global',
-        highlights = false,
-        clicks = false,
-        hover = false,
-        align = false,
-        raw = false,
-        install = false,
-    },
-    render = function(render_spec, opts)
-        return statuesque.render(render_spec, 'text', opts)
-    end,
-})
-```
-
-Custom backends can also be shipped as runtimepath modules. Put a module at
+Backends translate normalized render specs into a concrete target shape.
+Custom backends are discovered from runtimepath modules. Put a module at
 `lua/statuesque/backend/<name>.lua` and return a table with
-`render(render_spec, opts)` plus optional `capabilities`:
+`render(render_spec, opts)` plus optional `capabilities`; no backend registry or
+registration lifecycle is required:
 
 ```lua
 -- lua/statuesque/backend/my_surface.lua
@@ -240,6 +303,9 @@ Capability fields should be explicit:
 - `raw`: whether backend-specific raw chunks are accepted.
 - `align`: whether semantic alignment markers are supported.
 - `install`: whether the target is installable through Statuesque.
+- `targets`: optional table/list of supported backend targets. Built-in
+  `statusline`, `tabline`, `winbar`, and `incline` do not expose extra targets,
+  so `backend.target` is rejected for them.
 - `degradation_metadata`: whether unsupported semantics are surfaced as
   metadata instead of being silently dropped.
 
@@ -259,6 +325,9 @@ the caller, while function handlers are invoked directly.
 `install_surface(surface, target)` installs a configured provider onto
 `statusline`, `tabline`, or `winbar`. Statusline installs always use Neovim's
 global statusline mode (`laststatus=3`).
+Incline surfaces are not installed through `install_surface`; the default preset
+uses `statuesque.integrations.incline` to configure `incline.nvim` when it is
+available, with Statuesque still owning the render spec and cache behavior.
 
 Backends advertise `capabilities`; built-in and runtimepath backends expose
 those capabilities through `backend_capabilities(target)`. Unsupported target

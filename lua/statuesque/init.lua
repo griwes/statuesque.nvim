@@ -65,15 +65,6 @@ local function maybe_publish_manifold_status(surface_or_provider)
 end
 
 --- @param value any
---- @return statuesque.PresetOptions
-local function preset_options(value)
-    if type(value) == 'table' then
-        return value
-    end
-    return {}
-end
-
---- @param value any
 --- @return statuesque.ManifoldAutoOptions
 local function manifold_options(value)
     if type(value) == 'table' then
@@ -89,8 +80,8 @@ function M.setup(config)
     require('statuesque.config').configure(config)
     require('statuesque.style').define_default_highlights()
 
-    if config.preset ~= nil and config.preset ~= false then
-        require('statuesque.presets.default').install(preset_options(config.preset))
+    if config.surfaces ~= nil or (config.preset ~= nil and config.preset ~= false) then
+        require('statuesque.presets.default').install(config)
     end
 
     if config.manifold ~= false then
@@ -127,13 +118,6 @@ end
 function M.render(render_spec, target, opts)
     target = target or 'text'
     return require('statuesque.backend').render(target, render_spec, opts)
-end
-
---- Register a custom render backend.
---- @param name string
---- @param backend statuesque.Backend
-function M.register_backend(name, backend)
-    require('statuesque.backend').register(name, backend)
 end
 
 --- Return render backend capability metadata.

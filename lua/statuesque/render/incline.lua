@@ -1,16 +1,10 @@
 local cache = require('statuesque.cache')
 local context = require('statuesque.context')
+local render_variant = require('statuesque.render.variant')
 local spec = require('statuesque.spec')
 local style = require('statuesque.style')
 
 local M = {}
-
---- @param value any
---- @return string
-local function encode_variant_value(value)
-    value = tostring(value or '')
-    return ('%d:%s'):format(#value, value)
-end
 
 --- @generic T
 --- @param value T
@@ -32,22 +26,24 @@ end
 local function defaults_variant(ctx)
     local defaults = ctx.backend_defaults or {}
     return table.concat({
-        encode_variant_value(defaults.left_separator),
-        encode_variant_value(defaults.right_separator),
-        encode_variant_value(defaults.inner_left_separator),
-        encode_variant_value(defaults.inner_right_separator),
-        encode_variant_value(defaults.separator_padding),
-        encode_variant_value(defaults.side),
+        render_variant.encode_value(defaults.left_separator),
+        render_variant.encode_value(defaults.right_separator),
+        render_variant.encode_value(defaults.inner_left_separator),
+        render_variant.encode_value(defaults.inner_right_separator),
+        render_variant.encode_value(defaults.separator_padding),
+        render_variant.encode_value(defaults.side),
     }, '|')
 end
 
 --- @param ctx statuesque.RenderContext
+--- @param node statuesque.NormalizedNode
 --- @return string
-local function variant_key(ctx)
-    return ('side=%s,separator_side=%s,defaults=%s'):format(
+local function variant_key(ctx, node)
+    return ('side=%s,separator_side=%s,defaults=%s,hl=%s'):format(
         ctx.side or '',
         ctx.separator_side or '',
-        defaults_variant(ctx)
+        defaults_variant(ctx),
+        render_variant.node_highlights(node)
     )
 end
 
@@ -142,7 +138,7 @@ end
 --- @param ctx statuesque.RenderContext
 --- @return string|table
 function render_node(node, ctx)
-    return copy(cache.get_rendered(ctx.target, node._statuesque_cache_key, variant_key(ctx), function()
+    return copy(cache.get_rendered(ctx.target, node._statuesque_cache_key, variant_key(ctx, node), function()
         return render_node_uncached(node, ctx)
     end))
 end
