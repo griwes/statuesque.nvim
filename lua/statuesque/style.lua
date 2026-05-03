@@ -11,11 +11,21 @@ local DEFAULT_READABLE_LIGHT = '#c0caf5'
 local HARD_READABLE_DARK = '#000000'
 local HARD_READABLE_LIGHT = '#ffffff'
 local SEMANTIC_REPAIR_DIRECTIONS = { 'exact', 'dark', 'light' }
+local OKLCH_CHROMA_EPSILON = 0.015
+local OKLCH_MIN_SEMANTIC_CHROMA_RATIO = 0.55
+local semantic_candidate_cache = {}
 --- @type statuesque.HighlightSpec
 local DEFAULT_SIGIL_HL = { fg = '#1a1b26', bg = '#ff9e64', bold = true }
 local readable_foreground
 local hue_preserving_foreground
 local semantic_repair_candidate
+local rgb_to_oklab
+local oklab_to_hex
+local rgb_to_oklch
+local oklch_to_hex
+local hue_distance
+local interpolate_hue
+local oklab_distance
 
 local DEFAULT_PALETTE_GROUPS = {
     'Normal',
@@ -428,11 +438,46 @@ function M.interpolate_color(left, right, ratio)
     if lr == nil or rr == nil then
         return ratio < 0.5 and left or right
     end
+
+    local left_lch = rgb_to_oklch(left)
+    local right_lch = rgb_to_oklch(right)
+    if left_lch ~= nil and right_lch ~= nil then
+        local chroma = left_lch.chroma + (right_lch.chroma - left_lch.chroma) * ratio
+        local lightness = left_lch.lightness + (right_lch.lightness - left_lch.lightness) * ratio
+        local color
+
+        if
+            left_lch.chroma > OKLCH_CHROMA_EPSILON
+            and right_lch.chroma > OKLCH_CHROMA_EPSILON
+            and hue_distance(left_lch.hue, right_lch.hue) <= 0.75
+        then
+            local hue = interpolate_hue(left_lch.hue, right_lch.hue, ratio)
+            color = oklch_to_hex(lightness, chroma, hue)
+            while color == nil and chroma > 0 do
+                chroma = chroma * 0.92
+                color = oklch_to_hex(lightness, chroma, hue)
+            end
+        else
+            local left_lab = rgb_to_oklab(left)
+            local right_lab = rgb_to_oklab(right)
+            if left_lab ~= nil and right_lab ~= nil then
+                color = oklab_to_hex(
+                    left_lab.lightness + (right_lab.lightness - left_lab.lightness) * ratio,
+                    left_lab.a + (right_lab.a - left_lab.a) * ratio,
+                    left_lab.b + (right_lab.b - left_lab.b) * ratio
+                )
+            end
+        end
+
+        if color ~= nil then
+            return color
+        end
+    end
+
     --- @cast lg integer
     --- @cast lb integer
     --- @cast rg integer
     --- @cast rb integer
-
     return rgb_to_hex(
         M.interpolate_channel(lr, rr, ratio),
         M.interpolate_channel(lg, rg, ratio),
@@ -562,6 +607,182 @@ local function color_identity_distance(source, candidate)
     return lab_distance(source, candidate) + (chroma_loss * 80) + (endpoint_penalty * 120)
 end
 
+--- @param channel integer
+--- @return number
+local function srgb_to_linear_channel(channel)
+    local value = channel / 255
+    if value <= 0.04045 then
+        return value / 12.92
+    end
+    return ((value + 0.055) / 1.055) ^ 2.4
+end
+
+--- @param value number
+--- @return integer
+local function linear_to_srgb_channel(value)
+    value = math.max(0, math.min(1, value))
+    local srgb
+    if value <= 0.0031308 then
+        srgb = 12.92 * value
+    else
+        srgb = (1.055 * (value ^ (1 / 2.4))) - 0.055
+    end
+    return math.floor(math.max(0, math.min(1, srgb)) * 255 + 0.5)
+end
+
+--- @class statuesque.OklabColor
+--- @field lightness number
+--- @field a number
+--- @field b number
+
+--- @class statuesque.OklchColor
+--- @field lightness number
+--- @field chroma number
+--- @field hue number
+
+--- @param color string
+--- @return statuesque.OklabColor?
+function rgb_to_oklab(color)
+    local red, green, blue = hex_to_rgb(color)
+    if red == nil then
+        return nil
+    end
+    --- @cast green integer
+    --- @cast blue integer
+
+    local r = srgb_to_linear_channel(red)
+    local g = srgb_to_linear_channel(green)
+    local b = srgb_to_linear_channel(blue)
+
+    local l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b
+    local m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b
+    local s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b
+
+    local l_root = l ^ (1 / 3)
+    local m_root = m ^ (1 / 3)
+    local s_root = s ^ (1 / 3)
+
+    return {
+        lightness = 0.2104542553 * l_root + 0.7936177850 * m_root - 0.0040720468 * s_root,
+        a = 1.9779984951 * l_root - 2.4285922050 * m_root + 0.4505937099 * s_root,
+        b = 0.0259040371 * l_root + 0.7827717662 * m_root - 0.8086757660 * s_root,
+    }
+end
+
+--- @param lightness number
+--- @param a number
+--- @param b number
+--- @return string?
+function oklab_to_hex(lightness, a, b)
+    local l_root = lightness + 0.3963377774 * a + 0.2158037573 * b
+    local m_root = lightness - 0.1055613458 * a - 0.0638541728 * b
+    local s_root = lightness - 0.0894841775 * a - 1.2914855480 * b
+
+    local l = l_root * l_root * l_root
+    local m = m_root * m_root * m_root
+    local s = s_root * s_root * s_root
+
+    local red = 4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s
+    local green = -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s
+    local blue = -0.0041960863 * l - 0.7034186147 * m + 1.7076147010 * s
+
+    local epsilon = 0.000001
+    if
+        red < -epsilon
+        or green < -epsilon
+        or blue < -epsilon
+        or red > 1 + epsilon
+        or green > 1 + epsilon
+        or blue > 1 + epsilon
+    then
+        return nil
+    end
+
+    return rgb_to_hex(linear_to_srgb_channel(red), linear_to_srgb_channel(green), linear_to_srgb_channel(blue))
+end
+
+--- @param color string
+--- @return statuesque.OklchColor?
+function rgb_to_oklch(color)
+    local lab = rgb_to_oklab(color)
+    if lab == nil then
+        return nil
+    end
+
+    return {
+        lightness = lab.lightness,
+        chroma = math.sqrt(lab.a * lab.a + lab.b * lab.b),
+        hue = math.atan2(lab.b, lab.a),
+    }
+end
+
+--- @param lightness number
+--- @param chroma number
+--- @param hue number
+--- @return string?
+function oklch_to_hex(lightness, chroma, hue)
+    return oklab_to_hex(lightness, chroma * math.cos(hue), chroma * math.sin(hue))
+end
+
+--- @param left number
+--- @param right number
+--- @return number
+function hue_distance(left, right)
+    local delta = math.abs(left - right) % (math.pi * 2)
+    return math.min(delta, (math.pi * 2) - delta)
+end
+
+--- @param left number
+--- @param right number
+--- @param ratio number
+--- @return number
+function interpolate_hue(left, right, ratio)
+    local delta = (right - left) % (math.pi * 2)
+    if delta > math.pi then
+        delta = delta - (math.pi * 2)
+    end
+    return left + delta * ratio
+end
+
+--- @param left string
+--- @param right string
+--- @return number
+function oklab_distance(left, right)
+    local left_lab = rgb_to_oklab(left)
+    local right_lab = rgb_to_oklab(right)
+    if left_lab == nil or right_lab == nil then
+        return math.huge
+    end
+
+    local lightness = left_lab.lightness - right_lab.lightness
+    local a = left_lab.a - right_lab.a
+    local b = left_lab.b - right_lab.b
+    return math.sqrt(lightness * lightness + a * a + b * b)
+end
+
+--- @param source string
+--- @param candidate string
+--- @return boolean
+local function palette_candidate_preserves_identity(source, candidate)
+    local source_lch = rgb_to_oklch(source)
+    local candidate_lch = rgb_to_oklch(candidate)
+    if source_lch == nil or candidate_lch == nil then
+        return false
+    end
+
+    if source_lch.chroma <= OKLCH_CHROMA_EPSILON then
+        return true
+    end
+    if candidate_lch.chroma < source_lch.chroma * 0.35 then
+        return false
+    end
+    if candidate_lch.chroma > OKLCH_CHROMA_EPSILON and hue_distance(source_lch.hue, candidate_lch.hue) > 0.7 then
+        return false
+    end
+
+    return true
+end
+
 --- @param colors table
 --- @param output string[]
 --- @param seen table<string, boolean>
@@ -623,6 +844,21 @@ end
 --- @return string[]
 local function resolve_palette(opts)
     opts = opts or {}
+    local cached_palette = rawget(opts, '__statuesque_resolved_palette')
+    if cached_palette ~= nil then
+        return cached_palette
+    end
+
+    --- @param colors string[]
+    --- @return string[]
+    local function finish(colors)
+        if type(opts) == 'table' then
+            opts.__statuesque_resolved_palette = colors
+            opts.__statuesque_palette_key = table.concat(colors, ',')
+        end
+        return colors
+    end
+
     local palette = opts.palette
     if palette == nil then
         local ok, config = pcall(require, 'statuesque.config')
@@ -631,7 +867,7 @@ local function resolve_palette(opts)
         end
     end
     if palette == false then
-        return {}
+        return finish({})
     end
     if type(palette) == 'function' then
         local ok, result = pcall(palette)
@@ -639,15 +875,15 @@ local function resolve_palette(opts)
     end
 
     if type(palette) ~= 'table' then
-        return derive_default_palette()
+        return finish(derive_default_palette())
     end
 
     local colors = {}
     collect_palette_colors(palette, colors, {})
     if #colors == 0 then
-        return derive_default_palette()
+        return finish(derive_default_palette())
     end
-    return colors
+    return finish(colors)
 end
 
 --- @param fg string
@@ -775,8 +1011,13 @@ function M.match_palette_color(fg, bg, opts)
         (contrast_ratio(anchored, bg) or 0)
         >= ((opts and (opts.min_contrast or opts.minimum_contrast)) or DEFAULT_MIN_CONTRAST)
     then
+        local anchored_distance = color_identity_distance(fg, anchored)
+        if not palette_candidate_preserves_identity(fg, anchored) then
+            return source_readable
+                or hue_preserving_foreground(fg, bg, opts)
+                or hue_preserving_foreground(anchored, bg, opts)
+        end
         if source_readable ~= nil then
-            local anchored_distance = color_identity_distance(fg, anchored)
             local source_distance = color_identity_distance(fg, source_readable)
             if anchored_distance > math.max(source_distance, palette_distance_tolerance(opts)) then
                 return source_readable
@@ -835,6 +1076,36 @@ end
 --- @field luminance number
 --- @field contrast number
 
+--- @param opts? statuesque.ComposeOptions
+--- @return string
+local function semantic_palette_key(opts)
+    if type(opts) == 'table' then
+        local key = rawget(opts, '__statuesque_palette_key')
+        if key ~= nil then
+            return key
+        end
+    end
+    return table.concat(resolve_palette(opts), ',')
+end
+
+--- @param fg string
+--- @param bg string
+--- @param opts? statuesque.ComposeOptions
+--- @param direction? 'exact'|'light'|'dark'
+--- @return string
+local function semantic_candidate_cache_key(fg, bg, opts, direction)
+    local minimum = opts and (opts.min_contrast or opts.minimum_contrast) or DEFAULT_MIN_CONTRAST
+    return table.concat({
+        fg,
+        bg,
+        direction or '',
+        tostring(minimum),
+        tostring(palette_distance_tolerance(opts)),
+        editor_background(opts),
+        semantic_palette_key(opts),
+    }, '|')
+end
+
 --- @param fg string
 --- @param bg string
 --- @param opts? statuesque.ComposeOptions
@@ -842,15 +1113,24 @@ end
 --- @return statuesque.SemanticRepairCandidate?
 function semantic_repair_candidate(fg, bg, opts, direction)
     opts = opts or {}
-    local red, green, blue = hex_to_rgb(fg)
-    if red == nil then
-        return nil
+    direction = direction or preferred_direction_for_background(bg, opts)
+    local cache_key = semantic_candidate_cache_key(fg, bg, opts, direction)
+    if semantic_candidate_cache[cache_key] ~= nil then
+        return semantic_candidate_cache[cache_key] ~= false and semantic_candidate_cache[cache_key] or nil
     end
-    --- @cast green integer
-    --- @cast blue integer
 
-    local hue, saturation, lightness = rgb_to_hsl(red, green, blue)
-    local source_chroma = rgb_chroma(red, green, blue)
+    --- @param candidate statuesque.SemanticRepairCandidate?
+    --- @return statuesque.SemanticRepairCandidate?
+    local function finish(candidate)
+        semantic_candidate_cache[cache_key] = candidate or false
+        return candidate
+    end
+
+    local source_lch = rgb_to_oklch(fg)
+    if source_lch == nil then
+        return finish(nil)
+    end
+
     local source_luminance = relative_luminance(fg) or 0.5
     local minimum = opts.min_contrast or opts.minimum_contrast or DEFAULT_MIN_CONTRAST
     local best
@@ -858,52 +1138,85 @@ function semantic_repair_candidate(fg, bg, opts, direction)
 
     if direction == 'exact' then
         if (contrast_ratio(fg, bg) or 0) >= minimum then
-            return {
+            return finish({
                 color = fg,
                 score = 0,
                 luminance = relative_luminance(fg) or 0.5,
                 contrast = contrast_ratio(fg, bg) or 0,
-            }
+            })
         end
     end
 
     --- @param candidate string
-    --- @param candidate_lightness number
     --- @param source_penalty number
-    local function consider_candidate(candidate, candidate_lightness, source_penalty)
+    --- @param palette_candidate? boolean
+    local function consider_candidate(candidate, source_penalty, palette_candidate)
         local candidate_contrast = contrast_ratio(candidate, bg) or 0
         if candidate_contrast < minimum then
             return
         end
-
-        local candidate_luminance = relative_luminance(candidate) or 0.5
-        if direction == 'light' and candidate_luminance < source_luminance and candidate_lightness < lightness then
+        if palette_candidate and not palette_candidate_preserves_identity(fg, candidate) then
             return
         end
-        if direction == 'dark' and candidate_luminance > source_luminance and candidate_lightness > lightness then
+
+        local candidate_lch = rgb_to_oklch(candidate)
+        if candidate_lch == nil then
+            return
+        end
+
+        if
+            not palette_candidate
+            and source_lch.chroma > OKLCH_CHROMA_EPSILON
+            and candidate_lch.chroma < source_lch.chroma * OKLCH_MIN_SEMANTIC_CHROMA_RATIO
+        then
+            return
+        end
+
+        local candidate_luminance = relative_luminance(candidate) or 0.5
+        if
+            direction == 'light'
+            and candidate_luminance < source_luminance
+            and candidate_lch.lightness < source_lch.lightness
+        then
+            return
+        end
+        if
+            direction == 'dark'
+            and candidate_luminance > source_luminance
+            and candidate_lch.lightness > source_lch.lightness
+        then
             return
         end
         if direction == 'exact' and color_identity_distance(fg, candidate) > palette_distance_tolerance(opts) then
             return
         end
 
-        local candidate_red, candidate_green, candidate_blue = hex_to_rgb(candidate)
-        if candidate_red == nil then
-            return
+        local chroma_loss = math.max(0, source_lch.chroma - candidate_lch.chroma)
+        local chroma_ratio = source_lch.chroma > 0 and math.min(candidate_lch.chroma / source_lch.chroma, 1) or 1
+        local hue_penalty = 0
+        if source_lch.chroma > OKLCH_CHROMA_EPSILON and candidate_lch.chroma > OKLCH_CHROMA_EPSILON then
+            hue_penalty = hue_distance(source_lch.hue, candidate_lch.hue) / math.pi
         end
-        --- @cast candidate_green integer
-        --- @cast candidate_blue integer
-
-        local candidate_chroma = rgb_chroma(candidate_red, candidate_green, candidate_blue)
-        local chroma_loss = math.max(0, source_chroma - candidate_chroma)
-        local endpoint_penalty = math.max(0, candidate_lightness - 0.9, 0.1 - candidate_lightness)
-        local saturation_penalty = math.abs(color_chroma(candidate) - source_chroma) * 0.25
-        local identity_penalty = color_identity_distance(fg, candidate) / 85
-        local score = identity_penalty
-            + (chroma_loss * 1.5)
-            + (endpoint_penalty * 2)
-            + saturation_penalty
+        local endpoint_penalty = math.max(0, candidate_lch.lightness - 0.9, 0.08 - candidate_lch.lightness)
+        local identity_penalty = oklab_distance(fg, candidate) * 1.8
+        local direction_lightness_penalty = 0
+        if direction == 'dark' then
+            direction_lightness_penalty = 1 - candidate_lch.lightness
+        elseif direction == 'light' then
+            direction_lightness_penalty = candidate_lch.lightness
+        end
+        local contrast_excess = math.max(0, candidate_contrast - minimum)
+        local palette_bonus = palette_candidate and -0.18 or 0
+        local semantic_chroma_bias = palette_candidate and 0.2 or 2.8
+        local score = (direction_lightness_penalty * 2.0)
+            + (chroma_loss * 3.5)
+            + ((1 - chroma_ratio) * semantic_chroma_bias)
+            + (hue_penalty * 3.5)
+            + endpoint_penalty
+            + identity_penalty
             + source_penalty
+            + palette_bonus
+            - (contrast_excess * 0.03)
         if score < best_score then
             best = {
                 color = candidate,
@@ -916,33 +1229,33 @@ function semantic_repair_candidate(fg, bg, opts, direction)
     end
 
     for _, candidate in ipairs(resolve_palette(opts)) do
-        consider_candidate(candidate, color_lightness(candidate), 0.1)
+        consider_candidate(candidate, 0.05, true)
     end
 
     if direction == 'exact' then
-        return best
+        return finish(best)
     end
 
-    for saturation_step = 0, 10 do
-        local candidate_saturation = saturation + ((1 - saturation) * (saturation_step / 10))
+    local start_lightness = math.floor(source_lch.lightness * 100 + 0.5)
+    local lightness_start = direction == 'light' and start_lightness or 0
+    local lightness_end = direction == 'light' and 100 or start_lightness
 
-        for step = 0, 100 do
-            local candidate_lightness = step / 100
-            local allowed = true
-            if direction == 'light' and candidate_lightness < lightness then
-                allowed = false
-            end
-            if direction == 'dark' and candidate_lightness > lightness then
-                allowed = false
-            end
-            if allowed then
-                local candidate = hsl_to_hex(hue, candidate_saturation, candidate_lightness)
-                consider_candidate(candidate, candidate_lightness, math.abs(candidate_lightness - lightness))
+    for step = lightness_start, lightness_end do
+        local candidate_lightness = step / 100
+        if direction == 'dark' then
+            candidate_lightness = (lightness_end - step) / 100
+        end
+
+        local minimum_chroma_step = source_lch.chroma > OKLCH_CHROMA_EPSILON and 55 or 0
+        for chroma_step = 100, minimum_chroma_step, -5 do
+            local candidate = oklch_to_hex(candidate_lightness, source_lch.chroma * (chroma_step / 100), source_lch.hue)
+            if candidate ~= nil then
+                consider_candidate(candidate, math.abs(candidate_lightness - source_lch.lightness), false)
             end
         end
     end
 
-    return best
+    return finish(best)
 end
 
 --- @class statuesque.SemanticRepairPair
@@ -952,6 +1265,7 @@ end
 
 --- @class statuesque.SemanticRepairPlan
 --- @field direction 'exact'|'dark'|'light'
+--- @field score number
 
 --- @param opts? statuesque.ComposeOptions
 --- @param pairs statuesque.SemanticRepairPair[]
@@ -1009,11 +1323,31 @@ local function score_semantic_direction(opts, pairs, direction)
 end
 
 --- @param opts? statuesque.ComposeOptions
+--- @return boolean
+--- @param opts? statuesque.ComposeOptions
 --- @param pairs statuesque.SemanticRepairPair[]
 --- @return statuesque.SemanticRepairPlan?
 local function choose_semantic_repair_plan(opts, pairs)
     if #pairs == 0 then
         return nil
+    end
+
+    local exact_score = 0
+    local all_exact = true
+    for _, pair in ipairs(pairs) do
+        local candidate = semantic_repair_candidate(pair.fg, pair.bg, opts, 'exact')
+        if candidate == nil then
+            all_exact = false
+            break
+        end
+        exact_score = exact_score + candidate.contrast
+    end
+
+    if all_exact then
+        return {
+            direction = 'exact',
+            score = exact_score,
+        }
     end
 
     local best_direction = 'exact'
@@ -1026,9 +1360,12 @@ local function choose_semantic_repair_plan(opts, pairs)
         end
     end
 
-    return {
+    local plan = {
         direction = best_direction,
+        score = best_score,
     }
+
+    return plan
 end
 
 --- @generic T
@@ -1119,9 +1456,11 @@ end
 --- @param inherited statuesque.HighlightSpec
 --- @return statuesque.HighlightSpec
 --- @return boolean has_explicit_foreground
+--- @return boolean has_explicit_background
 local function resolve_section_highlight(hl, inherited)
     local next_hl = type(hl) == 'string' and resolve_highlight_group(hl) or copy(hl)
     local has_explicit_foreground = type(next_hl) == 'table' and next_hl.fg ~= nil
+    local has_explicit_background = type(next_hl) == 'table' and next_hl.bg ~= nil
 
     if type(next_hl) ~= 'table' or (vim.islist and vim.islist(next_hl)) then
         next_hl = {}
@@ -1134,16 +1473,14 @@ local function resolve_section_highlight(hl, inherited)
         next_hl.bg = inherited.bg
     end
 
-    return next_hl, has_explicit_foreground
+    return next_hl, has_explicit_foreground, has_explicit_background
 end
 
 --- @param opts? statuesque.ComposeOptions
 --- @param nodes statuesque.NormalizedNode[]
 --- @param inherited statuesque.HighlightSpec
---- @return statuesque.SemanticRepairPlan?
-local function semantic_repair_plan_for_nodes(opts, nodes, inherited)
-    local pairs = {}
-
+--- @param pairs statuesque.SemanticRepairPair[]
+local function collect_semantic_repair_pairs(opts, nodes, inherited, pairs)
     for _, node in ipairs(nodes) do
         local node_hl, has_explicit_foreground = resolve_section_highlight(node.hl, inherited)
         if has_explicit_foreground and node_hl.fg ~= nil and node_hl.bg ~= nil then
@@ -1153,9 +1490,98 @@ local function semantic_repair_plan_for_nodes(opts, nodes, inherited)
                 preferred_direction = preferred_direction_for_background(node_hl.bg, opts),
             }
         end
+
+        if node.children ~= nil then
+            collect_semantic_repair_pairs(opts, node.children, node_hl, pairs)
+        end
+    end
+end
+
+--- @param opts? statuesque.ComposeOptions
+--- @param nodes statuesque.NormalizedNode[]
+--- @param inherited statuesque.HighlightSpec
+--- @return statuesque.SemanticRepairPlan?
+local function semantic_repair_plan_for_nodes(opts, nodes, inherited)
+    local pairs = {}
+    collect_semantic_repair_pairs(opts, nodes, inherited, pairs)
+    return choose_semantic_repair_plan(opts, pairs)
+end
+
+--- @class statuesque.SemanticForegroundSource
+--- @field fg string
+
+--- @param nodes statuesque.NormalizedNode[]
+--- @param inherited statuesque.HighlightSpec
+--- @param output statuesque.SemanticForegroundSource[]
+local function collect_inherited_background_foregrounds(nodes, inherited, output)
+    for _, node in ipairs(nodes) do
+        local node_hl, has_explicit_foreground, has_explicit_background = resolve_section_highlight(node.hl, inherited)
+        if has_explicit_foreground and not has_explicit_background and node_hl.fg ~= nil then
+            output[#output + 1] = { fg = node_hl.fg }
+        end
+
+        if node.children ~= nil then
+            collect_inherited_background_foregrounds(node.children, node_hl, output)
+        end
+    end
+end
+
+--- @param fg string
+--- @param bg string
+--- @param opts statuesque.ComposeOptions
+--- @return boolean
+local function semantic_source_is_readable(fg, bg, opts)
+    local minimum = opts.min_contrast or opts.minimum_contrast or DEFAULT_SEMANTIC_MIN_CONTRAST
+    return (contrast_ratio(fg, bg) or 0) >= minimum
+end
+
+--- @param level statuesque.HighlightSpec
+--- @param base statuesque.HighlightSpec
+--- @param sources statuesque.SemanticForegroundSource[]
+--- @param opts statuesque.ComposeOptions
+--- @return statuesque.HighlightSpec
+local function semantic_section_level(level, base, sources, opts)
+    if #sources < 2 or type(level.bg) ~= 'string' or type(base.bg) ~= 'string' or level.bg == base.bg then
+        return level
     end
 
-    return choose_semantic_repair_plan(opts, pairs)
+    local readable_opts = semantic_foreground_opts(opts)
+    local best_level = level
+    local best_score = -math.huge
+
+    for step = 0, 20 do
+        local mix = step / 20
+        local bg = M.interpolate_color(level.bg, base.bg, mix)
+        if bg ~= nil then
+            local readable = 0
+            local worst = math.huge
+            local total = 0
+
+            for _, source in ipairs(sources) do
+                local source_contrast = contrast_ratio(source.fg, bg) or 0
+                local repaired = semantic_repair_candidate(source.fg, bg, readable_opts, 'exact')
+                local usable_contrast = repaired and repaired.contrast or source_contrast
+                if semantic_source_is_readable(source.fg, bg, readable_opts) then
+                    readable = readable + 1
+                end
+                worst = math.min(worst, usable_contrast)
+                total = total + usable_contrast
+            end
+
+            local readable_ratio = readable / #sources
+            local average = total / #sources
+            local score = (readable_ratio * 30) + (worst * 4) + average - (mix * 0.35)
+            if readable == #sources then
+                return vim.tbl_deep_extend('force', level, { bg = bg })
+            end
+            if score > best_score then
+                best_score = score
+                best_level = vim.tbl_deep_extend('force', level, { bg = bg })
+            end
+        end
+    end
+
+    return best_level
 end
 
 --- @param opts? statuesque.ComposeOptions
@@ -1169,10 +1595,18 @@ local function inherit_section_highlight(opts, hl, inherited, repair_plan)
 
     if has_explicit_foreground and next_hl.fg ~= nil and next_hl.bg ~= nil then
         readable_opts = semantic_foreground_opts(opts)
+        local source_fg = next_hl.fg
         local candidate = repair_plan
                 and semantic_repair_candidate(next_hl.fg, next_hl.bg, readable_opts, repair_plan.direction)
             or nil
-        next_hl.fg = candidate and candidate.color or M.match_palette_color(next_hl.fg, next_hl.bg, readable_opts)
+        if candidate ~= nil then
+            next_hl.fg = candidate.color
+            if candidate.color ~= source_fg and next_hl.bold == nil then
+                next_hl.bold = true
+            end
+        else
+            next_hl.fg = M.match_palette_color(next_hl.fg, next_hl.bg, readable_opts)
+        end
     end
 
     return ensure_readable_hl(next_hl, readable_opts)
@@ -1502,6 +1936,26 @@ end
 
 --- @param prepared statuesque.PreparedComponent
 --- @param level statuesque.HighlightSpec
+--- @param surface statuesque.Surface
+--- @param opts statuesque.ComposeOptions
+--- @return statuesque.HighlightSpec
+local function effective_section_level(prepared, level, surface, opts)
+    if prepared.custom_rendered then
+        return level
+    end
+
+    local component = prepared.component
+    if type(component) == 'table' and component.hl ~= nil then
+        return level
+    end
+
+    local sources = {}
+    collect_inherited_background_foregrounds(prepared.nodes, level, sources)
+    return semantic_section_level(level, base_style(surface, opts), sources, opts)
+end
+
+--- @param prepared statuesque.PreparedComponent
+--- @param level statuesque.HighlightSpec
 --- @param level_index integer
 --- @param surface statuesque.Surface
 --- @param opts statuesque.ComposeOptions
@@ -1623,7 +2077,7 @@ local function append_gapped_left(nodes, prepared, levels, defaults, surface, si
     end
 
     for index, prepared_component in ipairs(prepared) do
-        local level = levels[index]
+        local level = effective_section_level(prepared_component, levels[index], surface, opts)
         if
             not prepared_component.custom_rendered and not (prepared[index - 1] and prepared[index - 1].custom_rendered)
         then
@@ -1681,7 +2135,7 @@ local function append_gapped_right(nodes, prepared, levels, defaults, surface, o
     local leading_separator = diagonal_reverse_separator(trailing_separator)
 
     for index, prepared_component in ipairs(prepared) do
-        local level = levels[index]
+        local level = effective_section_level(prepared_component, levels[index], surface, opts)
         if index > 1 and not prepared_component.custom_rendered and not prepared[index - 1].custom_rendered then
             nodes[#nodes + 1] = separator_node(
                 'segment-trailing-separator',
@@ -1779,7 +2233,7 @@ local function compose_side(prepared, opts, definition)
     end
 
     for index, prepared_component in ipairs(prepared) do
-        local level = levels[index]
+        local level = effective_section_level(prepared_component, levels[index], surface, opts)
         if #nodes > 0 and not prepared_component.custom_rendered then
             local previous = nodes[#nodes]
             if previous.custom_rendered ~= true then

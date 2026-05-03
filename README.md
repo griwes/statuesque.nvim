@@ -177,12 +177,17 @@ the original foreground toward a readable color with the same hue. Tune that
 boundary with `palette_distance_tolerance`. Explicit child foregrounds use
 `semantic_min_contrast` (default `3.5`) instead of the stricter generated-text
 threshold, because many semantic accents cannot retain their color identity on
-mode-reactive backgrounds at `4.5` contrast. Semantic foreground repair builds
-exact, darker, and lighter candidate sets from both same-hue repairs and the
-active palette, then picks one aggregate direction for a sibling widget run from
-coverage, worst/best/average contrast, source-color identity, and congruence
-with the editor background. Set `semantic_background = 'dark'` or `'light'` to
-override the `vim.o.background` bias used by that scoring.
+mode-reactive backgrounds at `4.5` contrast. Semantic foreground repair uses
+OKLCH/OKLab candidate generation: source colors keep their hue where possible,
+repair moves darker or lighter consistently across a sibling widget run, and the
+active palette is treated as a harmony bias rather than a hard clamp. Set
+`semantic_background = 'dark'` or `'light'` to override the `vim.o.background`
+bias used by that scoring. When every explicit foreground already meets
+contrast, Statuesque keeps the source colors without running a repair search.
+For widgets with multiple explicit foreground accents and inherited backgrounds,
+Statuesque first moves the whole section background toward the base bar color so
+semantic accents can remain recognizable before individual foreground repair is
+considered.
 Statusline composition uses the current editor mode as its outer section style
 by default; set `mode_style = false` to opt out. Other surfaces can opt in with
 `mode_style = true` or a specific mode name. Mode styles are derived from

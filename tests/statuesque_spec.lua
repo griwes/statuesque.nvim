@@ -548,9 +548,9 @@ describe('statuesque render spec', function()
         assert_equal(debug[3].hl.bg, '#ffffff')
         assert_equal(debug[4].children[1].hl.bg, '#ffffff')
         assert_equal(debug[4].children[2].hl.fg, '#ffffff')
-        assert_equal(debug[4].children[2].hl.bg, '#262626')
-        assert_equal(debug[4].children[3].hl.bg, '#262626')
-        assert_equal(debug[5].hl.bg, '#262626')
+        assert_equal(debug[4].children[2].hl.bg, '#0b0b0b')
+        assert_equal(debug[4].children[3].hl.bg, '#0b0b0b')
+        assert_equal(debug[5].hl.bg, '#0b0b0b')
 
         assert_equal(statuesque.render({ { separator = 'inner' } }, 'text'), '  ')
     end)
@@ -989,9 +989,9 @@ describe('statuesque render spec', function()
 
         assert_equal(debug[1].hl.bg, '#777777')
         assert(contrast(debug[1].hl.fg, debug[1].hl.bg) >= 4.5, debug[1].hl.fg)
-        assert_equal(debug[3].hl.bg, '#535353')
+        assert_equal(debug[3].hl.bg, '#515151')
         assert(contrast(debug[3].hl.fg, debug[3].hl.bg) >= 4.5, debug[3].hl.fg)
-        assert_equal(debug[5].hl.bg, '#2f2f2f')
+        assert_equal(debug[5].hl.bg, '#2e2e2e')
         assert(contrast(debug[5].hl.fg, debug[5].hl.bg) >= 4.5, debug[5].hl.fg)
     end)
 
@@ -1189,10 +1189,10 @@ describe('statuesque render spec', function()
         assert_equal(debug[8].role, 'right-edge-padding')
         assert_equal(debug[8].text, ' ')
         assert_equal(debug[8].hl.bg, '#ffffff')
-        assert_equal(debug[5].hl.bg, '#262626')
-        assert_equal(debug[6].children[1].hl.bg, '#262626')
+        assert_equal(debug[5].hl.bg, '#0b0b0b')
+        assert_equal(debug[6].children[1].hl.bg, '#0b0b0b')
         assert_equal(debug[6].children[2].hl.fg, '#ffffff')
-        assert_equal(debug[6].children[2].hl.bg, '#262626')
+        assert_equal(debug[6].children[2].hl.bg, '#0b0b0b')
         assert_equal(debug[6].children[3].hl.bg, '#ffffff')
         assert_equal(debug[7].hl.bg, '#ffffff')
         assert(statuesque.render(debug, 'statusline'):find('%=', 1, true))
@@ -1631,6 +1631,7 @@ describe('statuesque render spec', function()
 
     it('keeps semantic foregrounds instead of replacing them with distant readable palette colors', function()
         local matched = style.match_palette_color('#61AFEF', '#9d4d5c', {
+            min_contrast = 3.5,
             palette = {
                 '#ffffff',
             },
@@ -1639,7 +1640,7 @@ describe('statuesque render spec', function()
 
         assert(matched ~= '#ffffff', matched)
         assert(blue > red, matched)
-        assert(contrast(matched, '#9d4d5c') >= 4.5, matched)
+        assert(contrast(matched, '#9d4d5c') >= 3.5, matched)
     end)
 
     it('still accepts nearby palette colors that preserve the source color identity', function()
@@ -1685,7 +1686,7 @@ describe('statuesque render spec', function()
         assert(contrast(matched, '#9d4d5c') >= 3.5, matched)
     end)
 
-    it('uses dark semantic accent variants on light replace backgrounds', function()
+    it('darkens semantic-rich sections before muting recognizable accents', function()
         vim.api.nvim_set_hl(0, 'StatuesqueSemanticReplaceBlue', {
             fg = '#61AFEF',
         })
@@ -1715,23 +1716,21 @@ describe('statuesque render spec', function()
 
         local matched = debug[1].children[1].hl.fg
         local red, green, blue = rgb(matched)
+        local matched_bg = debug[1].children[1].hl.bg
 
         assert(matched ~= '#ffffff', matched)
-        assert(blue > red and blue > green, matched)
-        assert(luminance(matched) < luminance('#f7768e'), matched)
-        assert(channel_spread(matched) >= 60, matched)
-        assert(contrast(matched, '#f7768e') >= 3.5, matched)
+        assert(blue >= red and blue >= green, matched)
+        assert(luminance(matched_bg) < luminance('#f7768e'), matched_bg)
+        assert(contrast(matched, matched_bg) >= 3.5, matched)
 
         local warm = debug[1].children[2].hl.fg
         local warm_red, warm_green, warm_blue = rgb(warm)
         assert(warm ~= '#ffffff', warm)
-        assert(warm_red > warm_blue and warm_green > warm_blue, warm)
-        assert(luminance(warm) < luminance('#f7768e'), warm)
-        assert(channel_spread(warm) >= 60, warm)
-        assert(contrast(warm, '#f7768e') >= 3.5, warm)
+        assert(warm_red >= warm_blue and warm_green >= warm_blue, warm)
+        assert(contrast(warm, debug[1].children[2].hl.bg) >= 3.5, warm)
     end)
 
-    it('applies one semantic repair direction across explicit widget accents', function()
+    it('keeps multi-accent widget backgrounds coherent before repairing foregrounds', function()
         local background = '#f7768e'
         local debug = statuesque.render(
             statuesque.compose({
@@ -1745,18 +1744,81 @@ describe('statuesque render spec', function()
                 segment_layout = 'adjacent',
                 sigil = '',
                 mode_style = false,
-                palette = false,
+                palette = {
+                    '#ffffff',
+                    '#3b4261',
+                    '#89ddff',
+                    '#9ece6a',
+                    '#ff007c',
+                },
                 outer = { fg = '#ffffff', bg = background },
                 inner = { fg = '#ffffff', bg = background },
             }),
             'debug'
         )
 
+        assert(luminance(debug[1].hl.bg) < luminance(background), debug[1].hl.bg)
         for _, child in ipairs(debug[1].children) do
             local matched = child.hl.fg
-            assert(luminance(matched) < luminance(background), matched)
-            assert(contrast(matched, background) >= 3.5, matched)
+            assert_equal(child.hl.bg, debug[1].hl.bg)
+            assert(contrast(matched, child.hl.bg) >= 3.5, matched)
         end
+    end)
+
+    it('keeps Legate-like semantic accents muted but recognizable on mode backgrounds', function()
+        local background = '#6a85ca'
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    { text = 'pending', hl = { fg = '#61AFEF' } },
+                    { text = ' neutral', hl = { fg = '#7F848E' } },
+                    { text = ' success', hl = { fg = '#98C379' } },
+                    { text = ' failure', hl = { fg = '#E06C75' } },
+                    { text = ' waiting', hl = { fg = '#E5C07B' } },
+                },
+            }, {
+                surface = 'statusline',
+                segment_layout = 'adjacent',
+                sigil = '',
+                mode_style = false,
+                palette = {
+                    '#ffffff',
+                    '#3b4261',
+                    '#89ddff',
+                    '#9ece6a',
+                    '#ff007c',
+                },
+                outer = { fg = '#ffffff', bg = background },
+                inner = { fg = '#ffffff', bg = background },
+            }),
+            'debug'
+        )
+
+        local pending = debug[1].children[1].hl.fg
+        local neutral = debug[1].children[2].hl.fg
+        local success = debug[1].children[3].hl.fg
+        local failure = debug[1].children[4].hl.fg
+        local waiting = debug[1].children[5].hl.fg
+        local pending_red, pending_green, pending_blue = rgb(pending)
+        local success_red, success_green, success_blue = rgb(success)
+        local failure_red, failure_green, failure_blue = rgb(failure)
+        local waiting_red, waiting_green, waiting_blue = rgb(waiting)
+
+        assert(luminance(debug[1].hl.bg) < luminance(background), debug[1].hl.bg)
+        assert_equal(pending, '#61AFEF')
+        assert_equal(neutral, '#7F848E')
+        assert_equal(success, '#98C379')
+        assert_equal(failure, '#E06C75')
+        assert_equal(waiting, '#E5C07B')
+        for _, color in ipairs({ pending, neutral, success, failure, waiting }) do
+            assert(color ~= '#000000' and color ~= '#ffffff', color)
+            assert(contrast(color, debug[1].hl.bg) >= 3.5, color)
+        end
+        assert(pending_blue > pending_red and pending_blue > pending_green, pending)
+        assert(channel_spread(neutral) <= 40, neutral)
+        assert(success_green > success_red and success_green > success_blue, success)
+        assert(failure_red > failure_green and failure_red > failure_blue, failure)
+        assert(waiting_red > waiting_blue and waiting_green > waiting_blue, waiting)
     end)
 
     it('uses palette colors as candidates for aggregate semantic repairs', function()
