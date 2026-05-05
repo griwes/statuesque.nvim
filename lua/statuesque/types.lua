@@ -97,6 +97,7 @@
 --- @field truncate? statuesque.TruncateMode
 --- @field target? statuesque.Target
 --- @field _statuesque_cache_key? any
+--- @field _statuesque_semantic_chrome? statuesque.HighlightSpec
 --- @field [integer] statuesque.RenderSpec
 --- @field [string] any
 

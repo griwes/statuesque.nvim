@@ -1821,6 +1821,136 @@ describe('statuesque render spec', function()
         assert(waiting_red > waiting_blue and waiting_green > waiting_blue, waiting)
     end)
 
+    it('brackets darkened semantic sections with the original section color', function()
+        local background = '#f7768e'
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    { text = 'ACP', hl = { fg = '#61AFEF' } },
+                    { text = ' idle', hl = { fg = '#98C379' } },
+                },
+            }, {
+                surface = 'statusline',
+                segment_layout = 'gapped',
+                sigil = '',
+                mode_style = false,
+                palette = false,
+                outer = { fg = '#ffffff', bg = background },
+                inner = { fg = '#ffffff', bg = background },
+            }),
+            'debug'
+        )
+
+        assert_equal(debug[1].role, 'segment-leading-separator-chrome-outer')
+        assert_equal(debug[1].children[1].hl.fg, background)
+        assert_equal(debug[2].role, 'segment-leading-separator-chrome-inner')
+        assert_equal(debug[2].children[1].hl.bg, background)
+        assert_equal(debug[3].role, 'section')
+        assert(debug[3].hl.bg ~= background, debug[3].hl.bg)
+        assert_equal(debug[3].style.semantic_chrome.bg, background)
+        assert_equal(debug[4].role, 'segment-trailing-separator-chrome-outer')
+        assert_equal(debug[4].children[2].hl.bg, background)
+        assert_equal(debug[5].role, 'segment-trailing-separator-chrome-inner')
+        assert_equal(debug[5].children[1].hl.fg, background)
+    end)
+
+    it('chromes adjacent exits from darkened semantic sections', function()
+        local background = '#f7768e'
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    { text = 'ACP', hl = { fg = '#61AFEF' } },
+                    { text = ' idle', hl = { fg = '#98C379' } },
+                },
+                { text = ' ok' },
+            }, {
+                surface = 'statusline',
+                segment_layout = 'adjacent',
+                sigil = '',
+                mode_style = false,
+                palette = false,
+                outer = { fg = '#ffffff', bg = background },
+                inner = { fg = '#ffffff', bg = '#303030' },
+            }),
+            'debug'
+        )
+
+        assert_equal(debug[1].role, 'section')
+        assert_equal(debug[1].style.semantic_chrome.bg, background)
+        assert_equal(debug[2].role, 'separator-chrome-outer')
+        assert_equal(debug[2].children[1].hl.bg, background)
+        assert_equal(debug[3].role, 'separator-chrome-inner')
+        assert_equal(debug[3].children[1].hl.fg, background)
+        assert_equal(debug[4].role, 'section')
+        assert(debug[4].style.semantic_chrome == nil, vim.inspect(debug[4].style.semantic_chrome))
+    end)
+
+    it('repairs foregrounds instead of brightening already-dark sections', function()
+        local background = '#101010'
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    { text = 'dim', hl = { fg = '#202020' } },
+                    { text = ' muted', hl = { fg = '#252525' } },
+                },
+            }, {
+                surface = 'statusline',
+                segment_layout = 'gapped',
+                sigil = '',
+                mode_style = false,
+                palette = false,
+                outer = { fg = '#ffffff', bg = background },
+                inner = { fg = '#ffffff', bg = background },
+            }),
+            'debug'
+        )
+
+        assert_equal(debug[1].role, 'segment-leading-separator')
+        assert_equal(debug[2].role, 'section')
+        assert_equal(debug[2].hl.bg, background)
+        assert(debug[2].style.semantic_chrome == nil, vim.inspect(debug[2].style.semantic_chrome))
+        for _, child in ipairs(debug[2].children) do
+            assert(luminance(child.hl.fg) > luminance('#252525'), child.hl.fg)
+            assert(contrast(child.hl.fg, background) >= 3.5, child.hl.fg)
+        end
+    end)
+
+    it('keeps semantic section background cache separate across repair options', function()
+        local function section_bg(tolerance)
+            local debug = statuesque.render(
+                statuesque.compose({
+                    {
+                        { text = 'ACP', hl = { fg = '#61AFEF' } },
+                        { text = ' pending', hl = { fg = '#61AFEF' } },
+                    },
+                }, {
+                    surface = 'statusline',
+                    segment_layout = 'gapped',
+                    sigil = '',
+                    mode_style = false,
+                    palette = { '#003f7f' },
+                    palette_distance_tolerance = tolerance,
+                    base = { fg = '#ffffff', bg = '#8a5f75' },
+                    outer = { fg = '#ffffff', bg = '#f7768e' },
+                    inner = { fg = '#ffffff', bg = '#f7768e' },
+                }),
+                'debug'
+            )
+
+            for _, node in ipairs(debug) do
+                if node.role == 'section' then
+                    return node.hl.bg
+                end
+            end
+        end
+
+        local strict = section_bg(1)
+        local permissive = section_bg(200)
+
+        assert_equal(strict, '#8a5f75')
+        assert_equal(permissive, '#f7768e')
+    end)
+
     it('uses palette colors as candidates for aggregate semantic repairs', function()
         local background = '#f7768e'
         local debug = statuesque.render(

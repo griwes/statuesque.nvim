@@ -13,7 +13,9 @@ local HARD_READABLE_LIGHT = '#ffffff'
 local SEMANTIC_REPAIR_DIRECTIONS = { 'exact', 'dark', 'light' }
 local OKLCH_CHROMA_EPSILON = 0.015
 local OKLCH_MIN_SEMANTIC_CHROMA_RATIO = 0.55
+local SEMANTIC_SECTION_DARKEN_MIN_LUMINANCE = 0.18
 local semantic_candidate_cache = {}
+local semantic_section_level_cache = {}
 --- @type statuesque.HighlightSpec
 local DEFAULT_SIGIL_HL = { fg = '#1a1b26', bg = '#ff9e64', bold = true }
 local readable_foreground
@@ -1510,6 +1512,10 @@ end
 --- @class statuesque.SemanticForegroundSource
 --- @field fg string
 
+--- @class statuesque.SemanticSectionLevel
+--- @field hl statuesque.HighlightSpec
+--- @field chrome? statuesque.HighlightSpec
+
 --- @param nodes statuesque.NormalizedNode[]
 --- @param inherited statuesque.HighlightSpec
 --- @param output statuesque.SemanticForegroundSource[]
@@ -1535,17 +1541,95 @@ local function semantic_source_is_readable(fg, bg, opts)
     return (contrast_ratio(fg, bg) or 0) >= minimum
 end
 
+--- @param hl statuesque.HighlightSpec
+--- @return string
+local function semantic_highlight_key(hl)
+    return table.concat({
+        tostring(hl.fg or ''),
+        tostring(hl.bg or ''),
+        tostring(hl.bold or ''),
+        tostring(hl.italic or ''),
+    }, ',')
+end
+
+--- @param sources statuesque.SemanticForegroundSource[]
+--- @return string
+local function semantic_sources_key(sources)
+    local colors = {}
+    for index, source in ipairs(sources) do
+        colors[index] = source.fg
+    end
+    return table.concat(colors, ',')
+end
+
 --- @param level statuesque.HighlightSpec
 --- @param base statuesque.HighlightSpec
 --- @param sources statuesque.SemanticForegroundSource[]
 --- @param opts statuesque.ComposeOptions
+--- @return string
+local function semantic_section_level_key(level, base, sources, opts)
+    local readable_opts = semantic_foreground_opts(opts)
+    local minimum = readable_opts.min_contrast or readable_opts.minimum_contrast or DEFAULT_SEMANTIC_MIN_CONTRAST
+    return table.concat({
+        semantic_highlight_key(level),
+        semantic_highlight_key(base),
+        semantic_sources_key(sources),
+        tostring(minimum),
+        tostring(palette_distance_tolerance(readable_opts)),
+        tostring(semantic_palette_key(readable_opts)),
+        editor_background(readable_opts),
+    }, '|')
+end
+
+--- @param level statuesque.HighlightSpec
+--- @param bg string
 --- @return statuesque.HighlightSpec
+local function section_level_with_background(level, bg)
+    return vim.tbl_deep_extend('force', level, { bg = bg })
+end
+
+--- @param level statuesque.HighlightSpec
+--- @param bg string
+--- @return statuesque.HighlightSpec?
+local function semantic_chrome_for_background(level, bg)
+    if type(level.bg) ~= 'string' or level.bg == bg then
+        return nil
+    end
+    return copy(level)
+end
+
+--- @param level statuesque.HighlightSpec
+--- @param base statuesque.HighlightSpec
+--- @param sources statuesque.SemanticForegroundSource[]
+--- @param opts statuesque.ComposeOptions
+--- @return statuesque.SemanticSectionLevel
 local function semantic_section_level(level, base, sources, opts)
     if #sources < 2 or type(level.bg) ~= 'string' or type(base.bg) ~= 'string' or level.bg == base.bg then
-        return level
+        return { hl = level }
     end
 
     local readable_opts = semantic_foreground_opts(opts)
+    local all_source_readable = true
+    for _, source in ipairs(sources) do
+        if not semantic_source_is_readable(source.fg, level.bg, readable_opts) then
+            all_source_readable = false
+            break
+        end
+    end
+    if all_source_readable then
+        return { hl = level }
+    end
+
+    local level_luminance = relative_luminance(level.bg)
+    if level_luminance == nil or level_luminance <= SEMANTIC_SECTION_DARKEN_MIN_LUMINANCE then
+        return { hl = level }
+    end
+
+    local cache_key = semantic_section_level_key(level, base, sources, opts)
+    if semantic_section_level_cache[cache_key] ~= nil then
+        return semantic_section_level_cache[cache_key]
+    end
+
     local best_level = level
     local best_score = -math.huge
 
@@ -1572,16 +1656,26 @@ local function semantic_section_level(level, base, sources, opts)
             local average = total / #sources
             local score = (readable_ratio * 30) + (worst * 4) + average - (mix * 0.35)
             if readable == #sources then
-                return vim.tbl_deep_extend('force', level, { bg = bg })
+                local result = {
+                    hl = section_level_with_background(level, bg),
+                    chrome = semantic_chrome_for_background(level, bg),
+                }
+                semantic_section_level_cache[cache_key] = result
+                return result
             end
             if score > best_score then
                 best_score = score
-                best_level = vim.tbl_deep_extend('force', level, { bg = bg })
+                best_level = section_level_with_background(level, bg)
             end
         end
     end
 
-    return best_level
+    local result = {
+        hl = best_level,
+        chrome = semantic_chrome_for_background(level, best_level.bg),
+    }
+    semantic_section_level_cache[cache_key] = result
+    return result
 end
 
 --- @param opts? statuesque.ComposeOptions
@@ -1854,6 +1948,41 @@ local function separator_node(role, text, left_hl, right_hl, defaults, side, pad
     }
 end
 
+--- @param nodes statuesque.NormalizedNode[]
+--- @param role string
+--- @param text string
+--- @param left_hl? statuesque.Highlight
+--- @param right_hl? statuesque.Highlight
+--- @param chrome_hl? statuesque.HighlightSpec
+--- @param defaults statuesque.BackendDefaults
+--- @param side statuesque.Side
+--- @param normal_padding? string|{ before?: string, after?: string }
+--- @param first_padding? string|{ before?: string, after?: string }
+--- @param second_padding? string|{ before?: string, after?: string }
+local function append_chromed_separator(
+    nodes,
+    role,
+    text,
+    left_hl,
+    right_hl,
+    chrome_hl,
+    defaults,
+    side,
+    normal_padding,
+    first_padding,
+    second_padding
+)
+    if chrome_hl == nil then
+        nodes[#nodes + 1] = separator_node(role, text, left_hl, right_hl, defaults, side, normal_padding)
+        return
+    end
+
+    nodes[#nodes + 1] =
+        separator_node(role .. '-chrome-outer', text, left_hl, chrome_hl, defaults, side, first_padding or '')
+    nodes[#nodes + 1] =
+        separator_node(role .. '-chrome-inner', text, chrome_hl, right_hl, defaults, side, second_padding or '')
+end
+
 --- @param node statuesque.NormalizedNode
 --- @return boolean
 local function node_has_content(node)
@@ -1938,15 +2067,15 @@ end
 --- @param level statuesque.HighlightSpec
 --- @param surface statuesque.Surface
 --- @param opts statuesque.ComposeOptions
---- @return statuesque.HighlightSpec
+--- @return statuesque.SemanticSectionLevel
 local function effective_section_level(prepared, level, surface, opts)
     if prepared.custom_rendered then
-        return level
+        return { hl = level }
     end
 
     local component = prepared.component
     if type(component) == 'table' and component.hl ~= nil then
-        return level
+        return { hl = level }
     end
 
     local sources = {}
@@ -1959,8 +2088,9 @@ end
 --- @param level_index integer
 --- @param surface statuesque.Surface
 --- @param opts statuesque.ComposeOptions
+--- @param chrome? statuesque.HighlightSpec
 --- @return statuesque.NormalizedNode
-local function section_node(prepared, level, level_index, surface, opts)
+local function section_node(prepared, level, level_index, surface, opts, chrome)
     if prepared.custom_rendered then
         if #prepared.nodes == 1 then
             local node = prepared.nodes[1]
@@ -1987,7 +2117,7 @@ local function section_node(prepared, level, level_index, surface, opts)
         }
     end
 
-    return {
+    local node = {
         role = 'section',
         hl = level,
         style = {
@@ -1997,6 +2127,22 @@ local function section_node(prepared, level, level_index, surface, opts)
         },
         children = inherit_section_backgrounds(opts, prepared.nodes, level),
     }
+    if chrome ~= nil then
+        node.style.semantic_chrome = {
+            bg = chrome.bg,
+        }
+        node._statuesque_semantic_chrome = chrome
+    end
+    return node
+end
+
+--- @param node? statuesque.NormalizedNode
+--- @return statuesque.HighlightSpec?
+local function node_semantic_chrome(node)
+    if type(node) ~= 'table' then
+        return nil
+    end
+    return node._statuesque_semantic_chrome
 end
 
 --- @generic T
@@ -2077,21 +2223,41 @@ local function append_gapped_left(nodes, prepared, levels, defaults, surface, si
     end
 
     for index, prepared_component in ipairs(prepared) do
-        local level = effective_section_level(prepared_component, levels[index], surface, opts)
+        local effective = effective_section_level(prepared_component, levels[index], surface, opts)
+        local level = effective.hl
+        local chrome = effective.chrome
         if
             not prepared_component.custom_rendered and not (prepared[index - 1] and prepared[index - 1].custom_rendered)
         then
-            nodes[#nodes + 1] =
-                separator_node('segment-leading-separator', leading_separator, base_hl, level, defaults, 'right', {
-                    after = separator_padding,
-                })
+            append_chromed_separator(
+                nodes,
+                'segment-leading-separator',
+                leading_separator,
+                base_hl,
+                level,
+                chrome,
+                defaults,
+                'right',
+                { after = separator_padding },
+                '',
+                { after = separator_padding }
+            )
         end
-        nodes[#nodes + 1] = section_node(prepared_component, level, index, surface, opts)
+        nodes[#nodes + 1] = section_node(prepared_component, level, index, surface, opts, chrome)
         if not prepared_component.custom_rendered then
-            nodes[#nodes + 1] =
-                separator_node('segment-trailing-separator', trailing_separator, level, base_hl, defaults, 'left', {
-                    before = separator_padding,
-                })
+            append_chromed_separator(
+                nodes,
+                'segment-trailing-separator',
+                trailing_separator,
+                level,
+                base_hl,
+                chrome,
+                defaults,
+                'left',
+                { before = separator_padding },
+                { before = separator_padding },
+                ''
+            )
         end
         if
             gap_padding ~= ''
@@ -2135,26 +2301,43 @@ local function append_gapped_right(nodes, prepared, levels, defaults, surface, o
     local leading_separator = diagonal_reverse_separator(trailing_separator)
 
     for index, prepared_component in ipairs(prepared) do
-        local level = effective_section_level(prepared_component, levels[index], surface, opts)
+        local effective = effective_section_level(prepared_component, levels[index], surface, opts)
+        local level = effective.hl
+        local chrome = effective.chrome
         if index > 1 and not prepared_component.custom_rendered and not prepared[index - 1].custom_rendered then
-            nodes[#nodes + 1] = separator_node(
+            append_chromed_separator(
+                nodes,
                 'segment-trailing-separator',
                 trailing_separator,
                 level,
                 base_hl,
+                chrome,
                 defaults,
                 trailing_side,
                 {
                     before = separator_padding,
-                }
+                },
+                {
+                    before = separator_padding,
+                },
+                ''
             )
         end
-        nodes[#nodes + 1] = section_node(prepared_component, level, index, surface, opts)
+        nodes[#nodes + 1] = section_node(prepared_component, level, index, surface, opts, chrome)
         if not prepared_component.custom_rendered then
-            nodes[#nodes + 1] =
-                separator_node('segment-leading-separator', leading_separator, base_hl, level, defaults, leading_side, {
-                    after = separator_padding,
-                })
+            append_chromed_separator(
+                nodes,
+                'segment-leading-separator',
+                leading_separator,
+                base_hl,
+                level,
+                chrome,
+                defaults,
+                leading_side,
+                { after = separator_padding },
+                '',
+                { after = separator_padding }
+            )
         end
         if
             gap_padding ~= ''
@@ -2233,32 +2416,39 @@ local function compose_side(prepared, opts, definition)
     end
 
     for index, prepared_component in ipairs(prepared) do
-        local level = effective_section_level(prepared_component, levels[index], surface, opts)
+        local effective = effective_section_level(prepared_component, levels[index], surface, opts)
+        local level = effective.hl
+        local chrome = effective.chrome
         if #nodes > 0 and not prepared_component.custom_rendered then
             local previous = nodes[#nodes]
             if previous.custom_rendered ~= true then
-                nodes[#nodes + 1] = separator_node(
+                local boundary_chrome = node_semantic_chrome(previous) or chrome
+                append_chromed_separator(
+                    nodes,
                     'separator',
                     definition.separator(defaults),
                     definition.left_hl(previous.hl, level),
                     definition.right_hl(previous.hl, level),
+                    boundary_chrome,
                     defaults,
                     definition.side
                 )
             end
         end
 
-        nodes[#nodes + 1] = section_node(prepared_component, level, index, surface, opts)
+        nodes[#nodes + 1] = section_node(prepared_component, level, index, surface, opts, chrome)
     end
 
     if #prepared > 0 and definition.trailing_separator ~= false then
         local final = nodes[#nodes]
         if final.custom_rendered ~= true then
-            nodes[#nodes + 1] = separator_node(
+            append_chromed_separator(
+                nodes,
                 'trailing-separator',
                 definition.separator(defaults),
                 definition.trailing_left_hl(final.hl),
                 definition.trailing_right_hl(final.hl),
+                node_semantic_chrome(final),
                 defaults,
                 definition.side
             )

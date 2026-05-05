@@ -185,9 +185,15 @@ active palette is treated as a harmony bias rather than a hard clamp. Set
 bias used by that scoring. When every explicit foreground already meets
 contrast, Statuesque keeps the source colors without running a repair search.
 For widgets with multiple explicit foreground accents and inherited backgrounds,
-Statuesque first moves the whole section background toward the base bar color so
-semantic accents can remain recognizable before individual foreground repair is
-considered.
+Statuesque first tries to keep the source foregrounds exactly as supplied. If
+those colors are too bright to remain readable while preserving hue, Statuesque
+darkens the whole section background toward the base bar color, brackets the
+segment with the original section color, and then transitions into the darkened
+background. If the inherited section background is already dark, Statuesque does
+not introduce a bright replacement segment; it keeps the dark background and
+repairs the foregrounds lighter instead. Palette resolution, foreground repair,
+and semantic section-background decisions are cached by the material color inputs
+so steady rerenders do not repeat the color search.
 Statusline composition uses the current editor mode as its outer section style
 by default; set `mode_style = false` to opt out. Other surfaces can opt in with
 `mode_style = true` or a specific mode name. Mode styles are derived from
