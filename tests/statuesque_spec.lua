@@ -1617,6 +1617,55 @@ describe('statuesque render spec', function()
         assert_contains(rendered, ('statuesque-window-label-%d.lua +'):format(bufnr))
     end)
 
+    it('renders quickfix state for status surfaces', function()
+        vim.fn.setqflist({}, 'r', {
+            title = 'Build',
+            items = {
+                {
+                    filename = '/tmp/statuesque-quickfix.lua',
+                    lnum = 3,
+                    col = 1,
+                    text = 'quickfix item',
+                },
+            },
+        })
+
+        local rendered = statuesque.render({
+            name = 'quickfix',
+            opts = {
+                title = true,
+            },
+        }, 'statusline')
+
+        vim.fn.setqflist({}, 'r')
+
+        assert_contains(rendered, 'QF 1/1 Build')
+    end)
+
+    it('renders DAP status when nvim-dap has an active session', function()
+        local previous_dap = package.loaded.dap
+        package.loaded.dap = {
+            session = function()
+                return {
+                    config = {
+                        name = 'Debug Demo',
+                    },
+                }
+            end,
+            status = function()
+                return 'breakpoint'
+            end,
+        }
+
+        local rendered = statuesque.render({
+            name = 'dap',
+        }, 'statusline')
+
+        package.loaded.dap = previous_dap
+
+        assert_contains(rendered, ' breakpoint Debug Demo')
+    end)
+
     it('matches explicit foregrounds against the configured palette and background', function()
         local matched = style.match_palette_color('#f1c16d', '#101010', {
             palette = {
@@ -2553,6 +2602,7 @@ describe('statuesque render spec', function()
 
     it('renders default preset surfaces with distinct visual responsibilities', function()
         local previous_navic = package.loaded['nvim-navic']
+        local previous_dap = package.loaded.dap
         package.loaded['nvim-navic'] = {
             is_available = function()
                 return true
@@ -2561,6 +2611,28 @@ describe('statuesque render spec', function()
                 return 'Module > Function'
             end,
         }
+        package.loaded.dap = {
+            session = function()
+                return {
+                    config = {
+                        name = 'Debug Demo',
+                    },
+                }
+            end,
+            status = function()
+                return 'stopped'
+            end,
+        }
+        vim.fn.setqflist({}, 'r', {
+            items = {
+                {
+                    filename = '/tmp/statuesque-default-quickfix.lua',
+                    lnum = 7,
+                    col = 1,
+                    text = 'default quickfix item',
+                },
+            },
+        })
 
         local surfaces = require('statuesque.presets.default').surfaces({
             preset = {
@@ -2581,10 +2653,14 @@ describe('statuesque render spec', function()
         local winbar = statuesque.render(surfaces.winbar, 'text')
 
         package.loaded['nvim-navic'] = previous_navic
+        package.loaded.dap = previous_dap
+        vim.fn.setqflist({}, 'r')
 
         assert(statusline:find('S', 1, true), statusline)
         assert(statusline:find('NORMAL', 1, true), statusline)
         assert(not statusline:find('[No Name]', 1, true), statusline)
+        assert(statusline:find('QF 1/1', 1, true), statusline)
+        assert(statusline:find(' stopped Debug Demo', 1, true), statusline)
         assert(statusline:find('utf-8 unix', 1, true), statusline)
         assert(tabline:find('T', 1, true), tabline)
         assert(tabline:find('statuesque.nvim', 1, true), tabline)

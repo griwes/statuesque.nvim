@@ -56,6 +56,8 @@ local function default_surface_configs(config)
             left = {
                 { name = 'mode', opts = opts.mode or {} },
                 { name = 'diagnostics', opts = { empty = false } },
+                { name = 'quickfix', opts = opts.quickfix or {} },
+                { name = 'dap', opts = opts.dap or {} },
                 { name = 'git_repo', optional = true, opts = opts.git_repo or {} },
             },
             right = {

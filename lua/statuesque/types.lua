@@ -235,6 +235,8 @@
 --- @field mode? statuesque.WidgetModeOptions
 --- @field tabulature_widget? table
 --- @field git_repo? table
+--- @field quickfix? statuesque.WidgetQuickfixOptions
+--- @field dap? statuesque.WidgetDapOptions
 --- @field breadcrumbs? statuesque.WidgetBreadcrumbsOptions
 --- @field tabline_cwd_max_width? integer
 
@@ -289,6 +291,26 @@
 --- @class statuesque.WidgetGitDiffOptions
 --- @field labels? table<string, string>
 --- @field highlights? table<string, string>
+--- @field empty? boolean
+--- @field empty_text? string
+
+--- @class statuesque.WidgetQuickfixOptions
+--- @field kind? 'quickfix'|'location'|'loclist'|string
+--- @field list? 'quickfix'|'location'|'loclist'|string
+--- @field label? string
+--- @field title? boolean
+--- @field max_width? integer
+--- @field hl? statuesque.Highlight
+--- @field empty? boolean
+--- @field empty_text? string
+
+--- @class statuesque.WidgetDapOptions
+--- @field icon? string
+--- @field running_text? string
+--- @field session_name? boolean
+--- @field show_without_session? boolean
+--- @field max_width? integer
+--- @field hl? statuesque.Highlight
 --- @field empty? boolean
 --- @field empty_text? string
 
