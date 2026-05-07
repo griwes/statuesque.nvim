@@ -9,7 +9,7 @@ return function()
         elseif current == total then
             label = 'Bot'
         else
-            label = math.floor(current * 100 / total) .. '%%'
+            label = math.floor(current * 100 / total) .. '%'
         end
 
         return {

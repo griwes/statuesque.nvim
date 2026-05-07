@@ -521,6 +521,23 @@ describe('statuesque render spec', function()
         end)
     end)
 
+    it('keeps widget text unescaped before Vim target rendering', function()
+        vim.cmd('enew!')
+        vim.api.nvim_buf_set_lines(0, 0, -1, false, {
+            'one',
+            'two',
+            'three',
+            'four',
+        })
+        vim.api.nvim_win_set_cursor(0, { 2, 0 })
+
+        local widget = require('statuesque.widgets.progress')()
+        local spec = widget()
+
+        assert_equal(spec.text, '50%')
+        assert_contains(statuesque.render(spec, 'statusline'), '50%%')
+    end)
+
     it('composes section-style bars with interpolated styles and explicit separators', function()
         local debug = statuesque.render(
             statuesque.compose({
