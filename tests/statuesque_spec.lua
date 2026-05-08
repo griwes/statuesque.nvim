@@ -1634,6 +1634,72 @@ describe('statuesque render spec', function()
         assert_contains(rendered, ('statuesque-window-label-%d.lua +'):format(bufnr))
     end)
 
+    it('prefers Stratum path diff summaries for Git diff widgets', function()
+        local previous_stratum = package.loaded['stratum']
+        package.loaded['stratum'] = {
+            path_summary = function(path)
+                assert(path:find('statuesque-stratum-diff', 1, true), path)
+                return {
+                    added = 4,
+                    changed = 2,
+                    removed = 1,
+                }
+            end,
+        }
+        package.loaded['statuesque.widgets.git_diff'] = nil
+
+        local bufnr = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_buf_set_name(bufnr, ('/tmp/statuesque-stratum-diff-%d.lua'):format(bufnr))
+        vim.b[bufnr].vgit_status = {
+            added = 9,
+            changed = 9,
+            removed = 9,
+        }
+
+        local rendered = statuesque.render({
+            { name = 'git_diff' },
+        }, 'text', { bufnr = bufnr })
+
+        package.loaded['stratum'] = previous_stratum
+        package.loaded['statuesque.widgets.git_diff'] = nil
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+
+        assert_contains(rendered, ' 4')
+        assert_contains(rendered, ' 2')
+        assert_contains(rendered, ' 1')
+        assert(not rendered:find('9', 1, true), rendered)
+    end)
+
+    it('falls back to buffer Git diff state while Stratum is not ready', function()
+        local previous_stratum = package.loaded['stratum']
+        package.loaded['stratum'] = {
+            path_summary = function()
+                return nil, 'repository state is not ready: starting'
+            end,
+        }
+        package.loaded['statuesque.widgets.git_diff'] = nil
+
+        local bufnr = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_buf_set_name(bufnr, ('/tmp/statuesque-stratum-not-ready-%d.lua'):format(bufnr))
+        vim.b[bufnr].vgit_status = {
+            added = 1,
+            changed = 2,
+            removed = 3,
+        }
+
+        local rendered = statuesque.render({
+            { name = 'git_diff' },
+        }, 'text', { bufnr = bufnr })
+
+        package.loaded['stratum'] = previous_stratum
+        package.loaded['statuesque.widgets.git_diff'] = nil
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+
+        assert_contains(rendered, ' 1')
+        assert_contains(rendered, ' 2')
+        assert_contains(rendered, ' 3')
+    end)
+
     it('renders quickfix state for status surfaces', function()
         vim.fn.setqflist({}, 'r', {
             title = 'Build',
