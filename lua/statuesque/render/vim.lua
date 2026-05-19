@@ -2,6 +2,7 @@ local cache = require('statuesque.cache')
 local clicks = require('statuesque.clicks')
 local context = require('statuesque.context')
 local hovers = require('statuesque.hovers')
+local highlights = require('statuesque.render.highlights')
 local render_variant = require('statuesque.render.variant')
 local spec = require('statuesque.spec')
 local style = require('statuesque.style')
@@ -41,54 +42,6 @@ local function variant_key(ctx, node)
         defaults_variant(ctx),
         render_variant.node_highlights(node)
     )
-end
-
---- @param ctx statuesque.RenderContext
---- @param name string
---- @param hl statuesque.HighlightSpec
-local function record_inline_highlight(ctx, name, hl)
-    ctx.inline_highlight_definitions[#ctx.inline_highlight_definitions + 1] = {
-        name = name,
-        hl = hl,
-    }
-end
-
---- @param record table
-local function apply_inline_highlights(record)
-    if type(record.inline_highlight_definitions) ~= 'table' then
-        return
-    end
-
-    for _, definition in ipairs(record.inline_highlight_definitions) do
-        vim.api.nvim_set_hl(0, definition.name, definition.hl)
-    end
-end
-
---- @param hl? statuesque.Highlight
---- @param ctx statuesque.RenderContext
---- @return string?
-local function highlight_name(hl, ctx)
-    if hl == nil then
-        return nil
-    end
-
-    if type(hl) == 'string' then
-        return hl
-    end
-
-    if type(hl) ~= 'table' then
-        return nil
-    end
-
-    if vim.islist and vim.islist(hl) then
-        return highlight_name(hl[#hl], ctx)
-    end
-
-    ctx.inline_highlight_index = ctx.inline_highlight_index + 1
-    local name = ('%s%d'):format(ctx.inline_highlight_prefix, ctx.inline_highlight_index)
-    vim.api.nvim_set_hl(0, name, hl)
-    record_inline_highlight(ctx, name, hl)
-    return name
 end
 
 local render_node
@@ -134,7 +87,7 @@ local function render_node_uncached(node, ctx)
         return ''
     end
 
-    local hl = highlight_name(node.hl, ctx)
+    local hl = highlights.name(node.hl, ctx)
     if hl ~= nil then
         rendered = ('%%#%s#%s%%*'):format(hl, rendered)
     end
@@ -166,16 +119,10 @@ function render_node(node, ctx)
         function()
             local rendered = render_node_uncached(node, ctx)
             local inline_highlight_count = ctx.inline_highlight_index - inline_highlight_start
-            local definitions = {}
-
-            for index = inline_definition_start + 1, #ctx.inline_highlight_definitions do
-                definitions[#definitions + 1] = ctx.inline_highlight_definitions[index]
-            end
-
             return {
                 rendered = rendered,
                 inline_highlight_count = inline_highlight_count,
-                inline_highlight_definitions = definitions,
+                inline_highlight_definitions = highlights.capture(ctx, inline_definition_start),
                 hover_width = (ctx._statuesque_hover_col or hover_start_col) - hover_start_col,
                 hover_spans = hovers.capture_relative(ctx, hover_span_start, hover_start_col),
             }
@@ -199,7 +146,7 @@ function render_node(node, ctx)
     end
 
     ctx.inline_highlight_index = inline_highlight_start + (record.inline_highlight_count or 0)
-    apply_inline_highlights(record)
+    highlights.apply(record)
     return record.rendered
 end
 
@@ -208,11 +155,8 @@ end
 --- @param opts? statuesque.RenderContext
 --- @return string
 function M.render(render_spec, opts)
-    local ctx = vim.tbl_extend('force', context.with_target(opts, opts and opts.target or 'vim'), {
-        inline_highlight_index = 0,
-        inline_highlight_prefix = opts and opts.inline_highlight_prefix or 'StatuesqueInline',
-        inline_highlight_definitions = {},
-    })
+    local ctx =
+        highlights.with_context(context.with_target(opts, opts and opts.target or 'vim'), opts, 'StatuesqueInline')
 
     hovers.begin_render(ctx)
 

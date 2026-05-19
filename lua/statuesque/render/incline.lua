@@ -1,10 +1,20 @@
 local cache = require('statuesque.cache')
 local context = require('statuesque.context')
+local highlights = require('statuesque.render.highlights')
 local render_variant = require('statuesque.render.variant')
 local spec = require('statuesque.spec')
 local style = require('statuesque.style')
 
 local M = {}
+local HIGHLIGHT_NAMESPACE = vim.api.nvim_create_namespace('statuesque.incline')
+
+local function define_window_highlights()
+    for _, group in ipairs({ 'Normal', 'NormalFloat', 'InclineNormal', 'InclineNormalNC', 'EndOfBuffer' }) do
+        vim.api.nvim_set_hl(HIGHLIGHT_NAMESPACE, group, { bg = 'NONE' })
+    end
+end
+
+define_window_highlights()
 
 --- @generic T
 --- @param value T
@@ -39,9 +49,11 @@ end
 --- @param node statuesque.NormalizedNode
 --- @return string
 local function variant_key(ctx, node)
-    return ('side=%s,separator_side=%s,defaults=%s,hl=%s'):format(
+    return ('side=%s,separator_side=%s,inline=%s,inline_start=%d,defaults=%s,hl=%s'):format(
         ctx.side or '',
         ctx.separator_side or '',
+        ctx.inline_highlight_prefix or '',
+        ctx.inline_highlight_index or 0,
         defaults_variant(ctx),
         render_variant.node_highlights(node)
     )
@@ -78,20 +90,6 @@ local function copy_metadata(node)
     return metadata
 end
 
---- @param hl? statuesque.Highlight
---- @return string?
-local function incline_group(hl)
-    if type(hl) == 'string' then
-        return hl
-    end
-
-    if type(hl) == 'table' and vim.islist and vim.islist(hl) then
-        return incline_group(hl[#hl])
-    end
-
-    return nil
-end
-
 local render_node
 
 --- @param node statuesque.NormalizedNode
@@ -116,10 +114,14 @@ local function render_node_uncached(node, ctx)
         end
     end
 
-    local group = incline_group(node.hl)
-    local metadata = copy_metadata(node)
+    local group = highlights.name(node.hl, ctx)
+    -- incline.nvim treats every non-numeric table key without `group` as an
+    -- inline highlight definition. Structured metadata is therefore only safe
+    -- on nodes that already have an explicit group.
+    local source_metadata = copy_metadata(node)
+    local metadata = group ~= nil and source_metadata or nil
 
-    if group == nil and metadata == nil and #chunks == 1 then
+    if group == nil and source_metadata == nil and #chunks == 1 then
         return chunks[1]
     end
 
@@ -138,9 +140,73 @@ end
 --- @param ctx statuesque.RenderContext
 --- @return string|table
 function render_node(node, ctx)
-    return copy(cache.get_rendered(ctx.target, node._statuesque_cache_key, variant_key(ctx, node), function()
-        return render_node_uncached(node, ctx)
-    end))
+    local inline_highlight_start = ctx.inline_highlight_index
+    local inline_definition_start = #ctx.inline_highlight_definitions
+    --- @type { rendered: string|table, inline_highlight_count?: integer, inline_highlight_definitions?: { name: string, hl: statuesque.HighlightSpec }[] }
+    local record = cache.get_rendered(ctx.target, node._statuesque_cache_key, variant_key(ctx, node), function()
+        local rendered = render_node_uncached(node, ctx)
+        local inline_highlight_count = ctx.inline_highlight_index - inline_highlight_start
+        return {
+            rendered = rendered,
+            inline_highlight_count = inline_highlight_count,
+            inline_highlight_definitions = highlights.capture(ctx, inline_definition_start),
+        }
+    end)
+
+    if type(record) ~= 'table' or record.rendered == nil then
+        return copy(record)
+    end
+
+    ctx.inline_highlight_index = inline_highlight_start + (record.inline_highlight_count or 0)
+    highlights.apply(record)
+    return copy(record.rendered)
+end
+
+--- @param item any
+--- @param inherited_group? string
+--- @param inherited_metadata? table
+--- @param output table[]
+local function flatten_item(item, inherited_group, inherited_metadata, output)
+    if type(item) == 'string' or type(item) == 'number' then
+        local text = tostring(item)
+        if text == '' then
+            return
+        end
+        if inherited_group == nil and inherited_metadata == nil then
+            output[#output + 1] = text
+            return
+        end
+
+        local rendered = { text }
+        if inherited_group ~= nil then
+            rendered.group = inherited_group
+        end
+        if inherited_metadata ~= nil then
+            rendered.statuesque = inherited_metadata
+        end
+        output[#output + 1] = rendered
+        return
+    end
+
+    if type(item) ~= 'table' then
+        return
+    end
+
+    local group = item.group or inherited_group
+    local metadata = item.statuesque or inherited_metadata
+    for _, child in ipairs(item) do
+        flatten_item(child, group, metadata, output)
+    end
+end
+
+--- @param items table[]
+--- @return table[]
+local function flatten_items(items)
+    local flattened = {}
+    for _, item in ipairs(items) do
+        flatten_item(item, nil, nil, flattened)
+    end
+    return flattened
 end
 
 --- Render a spec into a deliberately limited Incline-style nested table.
@@ -149,12 +215,24 @@ end
 --- @param opts? statuesque.RenderContext
 --- @return any[]
 function M.render(render_spec, opts)
-    local ctx = context.with_target(opts, 'incline')
+    opts = opts or {}
+    opts.inline_highlight_namespace = opts.inline_highlight_namespace or HIGHLIGHT_NAMESPACE
+    local prefix = opts and opts.winid and ('StatuesqueInclineW%s_'):format(opts.winid) or 'StatuesqueIncline'
+    local ctx = highlights.with_context(context.with_target(opts, 'incline'), opts, prefix)
     local rendered = {}
     for _, node in ipairs(spec.normalize(render_spec, ctx)) do
         rendered[#rendered + 1] = render_node(node, ctx)
     end
-    return rendered
+    return flatten_items(rendered)
+end
+
+--- @return integer
+function M.highlight_namespace()
+    return HIGHLIGHT_NAMESPACE
+end
+
+function M.define_window_highlights()
+    define_window_highlights()
 end
 
 return M

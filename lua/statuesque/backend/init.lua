@@ -43,6 +43,9 @@ local BUILTIN_CAPABILITIES = {
         raw = true,
         install = true,
         global_statusline = true,
+        placement = {
+            vertical = 'bottom',
+        },
     },
     tabline = {
         render_scope = 'global',
@@ -54,6 +57,9 @@ local BUILTIN_CAPABILITIES = {
         align = true,
         raw = true,
         install = true,
+        placement = {
+            vertical = 'top',
+        },
     },
     winbar = {
         render_scope = 'window',
@@ -67,6 +73,9 @@ local BUILTIN_CAPABILITIES = {
         align = true,
         raw = true,
         install = true,
+        placement = {
+            vertical = 'top',
+        },
     },
     incline = {
         render_scope = 'window',
@@ -80,8 +89,14 @@ local BUILTIN_CAPABILITIES = {
         hover_degradation = 'metadata',
         align = false,
         raw = true,
-        install = false,
+        install = true,
         degradation_metadata = true,
+        placement = {
+            vertical = {
+                top = true,
+                bottom = true,
+            },
+        },
     },
 }
 

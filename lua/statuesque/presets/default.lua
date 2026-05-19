@@ -37,11 +37,87 @@ local function compose_opts(global_config, surface_config, surface, sigil)
     return {
         surface = surface,
         sigil = sigil,
+        placement = surface_config.placement,
+        base = surface_config.base or global_config.base,
         segment_layout = surface_config.segment_layout or global_config.segment_layout,
         gap_padding = surface_config.gap_padding or global_config.gap_padding,
         layout = surface_config.layout or global_config.layout,
         style = surface_config.style or global_config.style,
     }
+end
+
+--- @param config statuesque.Config
+--- @return statuesque.SurfacePlacement
+local function window_label_placement(config)
+    local window_label = type(config.window_label) == 'table' and config.window_label or {}
+    local preset = preset_opts(config)
+    local preset_window_label = type(preset.window_label) == 'table' and preset.window_label or {}
+    local targets = type(config.targets) == 'table' and config.targets or {}
+    local target = type(targets.window_label) == 'table' and targets.window_label or {}
+
+    local vertical = nil
+    if type(window_label.placement) == 'table' then
+        vertical = window_label.placement.vertical
+    end
+    vertical = vertical or window_label.vertical
+    if type(preset_window_label.placement) == 'table' then
+        vertical = vertical or preset_window_label.placement.vertical
+    end
+    vertical = vertical or preset_window_label.vertical
+    if type(target.placement) == 'table' then
+        vertical = vertical or target.placement.vertical
+    end
+
+    return {
+        vertical = vertical or 'bottom',
+    }
+end
+
+--- @param config statuesque.Config
+--- @return false|statuesque.HighlightSpec
+local function window_label_background(config)
+    local window_label = type(config.window_label) == 'table' and config.window_label or {}
+    local preset = preset_opts(config)
+    local preset_window_label = type(preset.window_label) == 'table' and preset.window_label or {}
+
+    local background = window_label.background
+    if background == nil then
+        background = preset_window_label.background
+    end
+    if background == nil or background == false or background == 'transparent' or background == 'none' then
+        return false
+    end
+    if type(background) == 'table' then
+        return background
+    end
+    if type(background) == 'string' then
+        return {
+            bg = background,
+        }
+    end
+    error('window_label.background must be false, "transparent", "none", a color string, or a highlight table')
+end
+
+--- @param config statuesque.Config
+--- @param surface_config statuesque.SurfaceConfig
+local function apply_window_label_config(config, surface_config)
+    if surface_config.placement == nil then
+        surface_config.placement = window_label_placement(config)
+    end
+    if surface_config.base == nil then
+        local background = window_label_background(config)
+        if background ~= false then
+            surface_config.base = background
+        end
+    end
+end
+
+--- @param surface string
+--- @param backend statuesque.SurfaceBackendConfig
+--- @return boolean
+local function is_single_sided_backend(surface, backend)
+    local capabilities = require('statuesque.backend').capabilities(backend.name or surface)
+    return type(capabilities) == 'table' and capabilities.align == false
 end
 
 --- @param config statuesque.Config
@@ -68,16 +144,28 @@ local function default_surface_configs(config)
             },
         },
         winbar = {
+            sigil = false,
             left = {
                 { name = 'breadcrumbs', optional = true, opts = opts.breadcrumbs or {} },
             },
         },
         window_label = {
-            left = {
+            sigil = false,
+            placement = window_label_placement(config),
+            right = {
                 { name = 'diagnostics', opts = { empty = false, signs = true } },
                 { name = 'git_diff' },
                 { name = 'filetype', opts = { icon_only = true } },
-                { name = 'filename', opts = { max_width = 48 } },
+                {
+                    name = 'filename',
+                    opts = {
+                        max_width = 48,
+                        separate_flags = true,
+                        modified_text = '[+]',
+                        readonly_text = '[-]',
+                        modified_hl = 'StatuesqueModifiedFilename',
+                    },
+                },
             },
             backend = {
                 name = 'incline',
@@ -151,6 +239,9 @@ local function surface_configs(config)
     for surface, override in pairs(overrides) do
         configs[surface] = merge_surface_config(configs[surface], override)
     end
+    if type(configs.window_label) == 'table' then
+        apply_window_label_config(config, configs.window_label)
+    end
 
     return configs
 end
@@ -162,6 +253,9 @@ local function backend_configs(surface, config)
     local backend = config.backend
     if backend == false then
         return {}
+    end
+    if backend == nil and surface == 'window_label' then
+        return { { name = 'incline' } }
     end
     if backend == nil then
         return { { name = surface } }
@@ -220,10 +314,15 @@ end
 --- @return statuesque.RenderNode
 local function compose_surface(surface, config, global_config)
     local backend = primary_backend(surface, config)
-    return style.compose(
-        surface_widgets(surface, config),
-        compose_opts(global_config, config, backend.name or surface, config.sigil)
-    )
+    local widgets = surface_widgets(surface, config)
+    local opts = compose_opts(global_config, config, surface, config.sigil)
+
+    if is_single_sided_backend(surface, backend) and (config.left == nil) ~= (config.right == nil) then
+        opts.side = config.right ~= nil and 'right' or 'left'
+        widgets = config.right or config.left or {}
+    end
+
+    return style.compose(widgets, opts)
 end
 
 --- @param opts? table
@@ -231,11 +330,80 @@ end
 local function apply_incline_side(opts, side)
     opts.window = opts.window or {}
     opts.window.placement = opts.window.placement or {}
+    opts.window.margin = opts.window.margin or {}
     local horizontal = opts.window.placement.horizontal
     if horizontal ~= nil and horizontal ~= side then
         error(('incline placement.horizontal=%s conflicts with surface %s side'):format(horizontal, side))
     end
     opts.window.placement.horizontal = side
+
+    if opts.window.margin.horizontal == nil then
+        opts.window.margin.horizontal = side == 'right' and { left = 1, right = 0 } or { left = 0, right = 1 }
+    end
+    if opts.window.padding == nil then
+        opts.window.padding = side == 'right' and { left = 1, right = 0 } or { left = 0, right = 1 }
+    end
+end
+
+--- @param supported any
+--- @param vertical? statuesque.VerticalPlacement
+--- @return boolean
+local function vertical_placement_supported(supported, vertical)
+    if vertical == nil then
+        return true
+    end
+    if supported == vertical then
+        return true
+    end
+    if type(supported) ~= 'table' then
+        return false
+    end
+    if supported[vertical] == true then
+        return true
+    end
+    for _, value in ipairs(supported) do
+        if value == vertical then
+            return true
+        end
+    end
+    return false
+end
+
+--- @param surface string
+--- @param backend_name string
+--- @param capabilities statuesque.BackendCapabilities?
+--- @param placement? statuesque.SurfacePlacement
+local function validate_vertical_placement(surface, backend_name, capabilities, placement)
+    local vertical = placement and placement.vertical
+    if vertical == nil then
+        return
+    end
+    local supported = type(capabilities) == 'table' and capabilities.placement and capabilities.placement.vertical
+        or nil
+    if not vertical_placement_supported(supported, vertical) then
+        error(
+            ('backend %s does not support vertical placement %s for surface %s'):format(backend_name, vertical, surface)
+        )
+    end
+end
+
+--- @param opts table
+--- @param placement? statuesque.SurfacePlacement
+local function apply_incline_placement(opts, placement)
+    local vertical = placement and placement.vertical
+    if vertical == nil then
+        return
+    end
+
+    opts.window = opts.window or {}
+    opts.window.placement = opts.window.placement or {}
+    local configured = opts.window.placement.vertical
+    if configured ~= nil and configured ~= vertical then
+        error(
+            ('incline placement.vertical=%s conflicts with surface vertical placement %s'):format(configured, vertical)
+        )
+    end
+    opts.window.placement.vertical = vertical
 end
 
 --- @param surface string
@@ -287,6 +455,7 @@ end
 local function validate_backend(surface, config, backend)
     local name = backend.name or surface
     validate_backend_target(surface, name, backend)
+    validate_vertical_placement(surface, name, require('statuesque.backend').capabilities(name), config.placement)
     if name == 'incline' and config.left ~= nil and config.right ~= nil then
         error(('surface %s cannot define both left and right for incline backend'):format(surface))
     end
@@ -350,6 +519,7 @@ local function install_backend(surface, config, backend)
         local side = config.right ~= nil and 'right' or 'left'
         local opts = vim.deepcopy(backend.opts or {})
         apply_incline_side(opts, side)
+        apply_incline_placement(opts, config.placement)
         require('statuesque.integrations.incline').setup(vim.tbl_extend('force', backend, { opts = opts }), surface)
         return
     end

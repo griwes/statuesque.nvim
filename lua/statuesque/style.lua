@@ -120,16 +120,31 @@ local DEFAULTS = {
     winbar = {
         sigil = '',
         sigil_hl = DEFAULT_SIGIL_HL,
-        left_separator = '',
-        right_separator = '',
-        inner_left_separator = '',
-        inner_right_separator = '',
+        left_separator = '',
+        right_separator = '',
+        inner_left_separator = '',
+        inner_right_separator = '',
         separator_padding = ' ',
         sigil_leading_padding = ' ',
         gap_padding = '',
         base = { fg = '#565f89', bg = '#1f2335' },
         outer = { fg = '#7dcfff', bg = '#24283b', bold = true },
         inner = { fg = '#a9b1d6', bg = '#1f2335' },
+    },
+    window_label = {
+        sigil = '',
+        sigil_hl = DEFAULT_SIGIL_HL,
+        left_separator = '',
+        right_separator = '',
+        inner_left_separator = '',
+        inner_right_separator = '',
+        separator_padding = ' ',
+        sigil_leading_padding = ' ',
+        gap_padding = '',
+        side = 'left',
+        base = { fg = '#565f89' },
+        outer = { fg = '#7aa2f7', bg = '#24283b', bold = true },
+        inner = { fg = '#c0caf5', bg = '#1f2335' },
     },
     incline = {
         sigil = '',
@@ -166,11 +181,35 @@ local STYLE_DEFAULTS = {
             right_gapped_separator = 'right',
         },
         winbar = {
-            left_separator = '',
-            right_separator = '',
-            inner_left_separator = '',
-            inner_right_separator = '',
+            left_separator = '',
+            right_separator = '',
+            inner_left_separator = '',
+            inner_right_separator = '',
             right_gapped_separator = 'right',
+        },
+        window_label = {
+            placement_defaults = {
+                top = {
+                    left_separator = '',
+                    right_separator = '',
+                    inner_left_separator = '',
+                    inner_right_separator = '',
+                    right_gapped_separator = 'right',
+                    base = { fg = '#565f89' },
+                    outer = { fg = '#1a1b26', bg = '#bb9af7', bold = true },
+                    inner = { fg = '#c0caf5', bg = '#292e42' },
+                },
+                bottom = {
+                    left_separator = '',
+                    right_separator = '',
+                    inner_left_separator = '',
+                    inner_right_separator = '',
+                    right_gapped_separator = 'right',
+                    base = { fg = '#565f89' },
+                    outer = { fg = '#1a1b26', bg = '#7aa2f7', bold = true },
+                    inner = { fg = '#c0caf5', bg = '#3b4261' },
+                },
+            },
         },
         incline = {
             left_separator = '',
@@ -205,6 +244,16 @@ local STYLE_DEFAULTS = {
             tabulature_sigil = '𝄞',
         },
         winbar = {
+            left_separator = '',
+            right_separator = '',
+            inner_left_separator = '',
+            inner_right_separator = '',
+            separator_padding = '',
+            sigil_padding = ' ',
+            gap_padding = ' ',
+            right_gapped_separator = 'left',
+        },
+        window_label = {
             left_separator = '',
             right_separator = '',
             inner_left_separator = '',
@@ -1775,7 +1824,18 @@ function M.backend_defaults(surface, opts)
     local configured_style = opts.style or require('statuesque.config').style()
     local style_defaults = STYLE_DEFAULTS[configured_style]
     if type(style_defaults) == 'table' and type(style_defaults[surface]) == 'table' then
-        defaults = vim.tbl_deep_extend('force', defaults, style_defaults[surface])
+        local surface_defaults = copy(style_defaults[surface])
+        local placement_defaults = surface_defaults.placement_defaults
+        surface_defaults.placement_defaults = nil
+        defaults = vim.tbl_deep_extend('force', defaults, surface_defaults)
+        local vertical = opts.placement and opts.placement.vertical
+        if
+            type(placement_defaults) == 'table'
+            and vertical ~= nil
+            and type(placement_defaults[vertical]) == 'table'
+        then
+            defaults = vim.tbl_deep_extend('force', defaults, placement_defaults[vertical])
+        end
     end
     if type(opts.backend_defaults) == 'table' then
         defaults = vim.tbl_deep_extend('force', defaults, opts.backend_defaults)
@@ -1867,12 +1927,17 @@ end
 --- @return statuesque.HighlightSpec
 local function base_style(surface, opts)
     local defaults = M.backend_defaults(surface, opts)
-    local base = opts.base
-        or defaults.base
+    local default_base = defaults.base
         or {
             fg = defaults.inner and defaults.inner.fg or nil,
             bg = defaults.inner and defaults.inner.bg or nil,
         }
+    local base = default_base
+    if type(opts.base) == 'table' then
+        base = vim.tbl_deep_extend('force', copy(default_base), opts.base)
+    elseif opts.base ~= nil then
+        base = opts.base
+    end
     return ensure_readable_hl(copy(base), opts)
 end
 
@@ -1885,9 +1950,20 @@ local function separator_highlight(side, left_hl, right_hl)
     local right_bg = type(right_hl) == 'table' and right_hl.bg or nil
 
     if side == 'right' then
+        if right_bg == nil then
+            return {
+                fg = left_bg,
+            }
+        end
         return {
             fg = right_bg,
             bg = left_bg,
+        }
+    end
+
+    if left_bg == nil then
+        return {
+            fg = right_bg,
         }
     end
 
@@ -2166,11 +2242,17 @@ local function append_right_edge_padding(nodes, defaults)
     end
 
     local final = nodes[#nodes]
-    nodes[#nodes + 1] = {
+    local padding_node = {
         role = 'right-edge-padding',
         text = padding,
         hl = final and final.hl or nil,
     }
+    if final and final.role == 'sigil' then
+        final.text = (final.text or '') .. padding
+        return nodes
+    end
+
+    nodes[#nodes + 1] = padding_node
     return nodes
 end
 
@@ -2291,29 +2373,74 @@ local function append_gapped_right(nodes, prepared, levels, defaults, surface, o
     end
     local separator_padding = defaults.separator_padding or ''
     local trailing_separator = defaults.right_separator or defaults.left_separator or ' '
-    local trailing_side = 'right'
-    local leading_side = 'left'
+    local trailing_side = 'left'
+    local leading_side = 'right'
+    local entry_separator
+    local entry_side
+    local exit_separator
+    local exit_side
     if defaults.right_gapped_separator == 'left' then
         trailing_separator = defaults.left_separator or defaults.right_separator or ' '
-        trailing_side = 'left'
-        leading_side = 'right'
     end
     local leading_separator = diagonal_reverse_separator(trailing_separator)
+    if defaults.right_gapped_separator == 'left' then
+        entry_separator = leading_separator
+        entry_side = leading_side
+        exit_separator = trailing_separator
+        exit_side = trailing_side
+    else
+        entry_separator = trailing_separator
+        entry_side = leading_side
+        exit_separator = leading_separator
+        exit_side = trailing_side
+    end
+    local initial_sigil = nodes[#nodes] and nodes[#nodes].role == 'sigil' and nodes[#nodes] or nil
 
     for index, prepared_component in ipairs(prepared) do
         local effective = effective_section_level(prepared_component, levels[index], surface, opts)
         local level = effective.hl
         local chrome = effective.chrome
-        if index > 1 and not prepared_component.custom_rendered and not prepared[index - 1].custom_rendered then
+        if initial_sigil ~= nil and index == 1 and not prepared_component.custom_rendered then
             append_chromed_separator(
                 nodes,
-                'segment-trailing-separator',
-                trailing_separator,
+                'sigil-leading-separator',
+                entry_separator,
+                base_hl,
+                initial_sigil.hl,
+                chrome,
+                defaults,
+                entry_side,
+                { after = separator_padding },
+                '',
+                { after = separator_padding }
+            )
+            append_chromed_separator(
+                nodes,
+                'sigil-trailing-separator',
+                exit_separator,
                 level,
                 base_hl,
                 chrome,
                 defaults,
-                trailing_side,
+                exit_side,
+                {
+                    before = separator_padding,
+                },
+                {
+                    before = separator_padding,
+                },
+                ''
+            )
+        elseif index > 1 and not prepared_component.custom_rendered and not prepared[index - 1].custom_rendered then
+            append_chromed_separator(
+                nodes,
+                'segment-trailing-separator',
+                exit_separator,
+                level,
+                base_hl,
+                chrome,
+                defaults,
+                exit_side,
                 {
                     before = separator_padding,
                 },
@@ -2328,12 +2455,12 @@ local function append_gapped_right(nodes, prepared, levels, defaults, surface, o
             append_chromed_separator(
                 nodes,
                 'segment-leading-separator',
-                leading_separator,
+                entry_separator,
                 base_hl,
                 level,
                 chrome,
                 defaults,
-                leading_side,
+                entry_side,
                 { after = separator_padding },
                 '',
                 { after = separator_padding }
@@ -2385,11 +2512,11 @@ local function compose_side(prepared, opts, definition)
 
     if definition.sigil ~= false then
         local sigil = opts.sigil
-        if sigil == nil then
+        if sigil == nil or sigil == true then
             sigil = defaults.sigil
         end
 
-        if sigil ~= nil and sigil ~= '' then
+        if type(sigil) == 'string' and sigil ~= '' then
             local sigil_padding = defaults.sigil_padding
             if sigil_padding == nil then
                 sigil_padding = defaults.separator_padding or ''
@@ -2546,12 +2673,9 @@ local function compose_resolved(components, opts)
     local side = opts.side or opts.separator_side or 'left'
     local prepared = prepared_components(components, opts)
     if side == 'right' then
-        return append_right_edge_padding(
-            reverse_list(
-                compose_side(reverse_list(prepared), opts, side_definition('right', opts.leading_separator ~= false))
-            ),
-            defaults
-        )
+        local definition = side_definition('right', opts.leading_separator ~= false)
+        definition.sigil = true
+        return append_right_edge_padding(reverse_list(compose_side(reverse_list(prepared), opts, definition)), defaults)
     end
     return append_right_edge_padding(
         compose_side(prepared, opts, side_definition('left', opts.trailing_separator ~= false)),
@@ -2588,6 +2712,7 @@ function M.define_default_highlights()
     vim.api.nvim_set_hl(0, 'StatuesqueSubtle', { fg = '#565f89', bg = inactive.bg })
     vim.api.nvim_set_hl(0, 'StatuesqueWarning', { fg = '#e0af68', bg = inactive.bg, bold = true })
     vim.api.nvim_set_hl(0, 'StatuesqueError', { fg = '#f7768e', bg = inactive.bg, bold = true })
+    vim.api.nvim_set_hl(0, 'StatuesqueModifiedFilename', { italic = true })
 end
 
 return M

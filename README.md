@@ -106,8 +106,19 @@ require('statuesque').setup({
         },
         window_label = {
             left = {
+                { name = 'diagnostics', opts = { empty = false, signs = true } },
+                { name = 'git_diff' },
                 { name = 'filetype', opts = { icon_only = true } },
-                { name = 'filename', opts = { max_width = 48 } },
+                {
+                    name = 'filename',
+                    opts = {
+                        max_width = 48,
+                        separate_flags = true,
+                        modified_text = '[+]',
+                        readonly_text = '[-]',
+                        modified_hl = 'StatuesqueModifiedFilename',
+                    },
+                },
             },
             backend = {
                 name = 'incline',
@@ -211,10 +222,10 @@ The default preset also exposes a `window_label` surface for Incline-backed
 per-window labels. When `incline.nvim` is installed, Statuesque can configure it
 from `surfaces.window_label.backend` and render buffer-local identity from
 Statuesque widgets instead of requiring a custom Incline render function in user
-config. Surface configs use `left` and `right` widget runs. If no backend is
-specified, a surface installs to the backend with the same name. Backends that
-support only one side, such as `incline`, reject surfaces that define both
-`left` and `right`.
+config. `window_label` defaults to the `incline` backend; most other surfaces
+install to the backend with the same name when no backend is specified. Surface
+configs use `left` and `right` widget runs. Backends that support only one side,
+such as `incline`, reject surfaces that define both `left` and `right`.
 Vim statusline-family targets lower the semantic alignment marker to `%=`.
 Incline-style separators can be oriented with `{ side = 'left' }` or
 `{ side = 'right' }` render/backend options.

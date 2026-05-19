@@ -249,6 +249,21 @@ function M.install_surface(surface, target)
     error(('unsupported install target: %s'):format(target))
 end
 
+---Replace a window-local render target while a window displays a given buffer.
+---The replacement is automatically cleared when that window shows another buffer.
+---@param opts statuesque.WindowSurfaceReplacement
+---@return integer[]
+function M.replace_window_surface(opts)
+    return require('statuesque.window_surface').replace(opts)
+end
+
+---Clear a window-local render target replacement installed through Statuesque.
+---@param winid integer
+---@param target string
+function M.clear_window_surface(winid, target)
+    require('statuesque.window_surface').clear(winid, target)
+end
+
 --- Dispatch a click registered while rendering a Vim statusline-family target.
 --- @param id integer|string
 --- @param button? string

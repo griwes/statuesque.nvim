@@ -34,6 +34,13 @@ local function highlight_hex(value)
     return ('#%06x'):format(value)
 end
 
+local function incline_chunk_text(chunk)
+    if type(chunk) == 'table' then
+        return chunk[1]
+    end
+    return chunk
+end
+
 local function rendered_highlight_with_fg(rendered, prefix, fg)
     for name in tostring(rendered):gmatch('%%#([^#]-)#') do
         if name:sub(1, #prefix) == prefix then
@@ -254,8 +261,14 @@ describe('statuesque render spec', function()
             end,
         }
 
-        assert_equal(statuesque.render({ cached_separator }, 'incline', { side = 'left' })[1][1], '  ')
-        assert_equal(statuesque.render({ cached_separator }, 'incline', { side = 'right' })[1][1], '  ')
+        assert_equal(
+            incline_chunk_text(statuesque.render({ cached_separator }, 'incline', { side = 'left' })[1]),
+            '  '
+        )
+        assert_equal(
+            incline_chunk_text(statuesque.render({ cached_separator }, 'incline', { side = 'right' })[1]),
+            '  '
+        )
     end)
 
     it('keeps cached winbar fragments separate per window and buffer', function()
@@ -292,9 +305,18 @@ describe('statuesque render spec', function()
             end,
         }
 
-        assert_equal(statuesque.render({ cached }, 'incline', { winid = 301, bufnr = 401 })[1][1], '301:401')
-        assert_equal(statuesque.render({ cached }, 'incline', { winid = 302, bufnr = 402 })[1][1], '302:402')
-        assert_equal(statuesque.render({ cached }, 'incline', { winid = 301, bufnr = 401 })[1][1], '301:401')
+        assert_equal(
+            incline_chunk_text(statuesque.render({ cached }, 'incline', { winid = 301, bufnr = 401 })[1]),
+            '301:401'
+        )
+        assert_equal(
+            incline_chunk_text(statuesque.render({ cached }, 'incline', { winid = 302, bufnr = 402 })[1]),
+            '302:402'
+        )
+        assert_equal(
+            incline_chunk_text(statuesque.render({ cached }, 'incline', { winid = 301, bufnr = 401 })[1]),
+            '301:401'
+        )
         assert_equal(calls, 2)
     end)
 
@@ -384,25 +406,25 @@ describe('statuesque render spec', function()
         }
 
         assert_equal(
-            statuesque.render({ cached_separator }, 'incline', {
+            incline_chunk_text(statuesque.render({ cached_separator }, 'incline', {
                 backend_defaults = {
                     side = 'left',
                     left_separator = 'L',
                     right_separator = 'R',
                     separator_padding = '',
                 },
-            })[1][1],
+            })[1]),
             'L'
         )
         assert_equal(
-            statuesque.render({ cached_separator }, 'incline', {
+            incline_chunk_text(statuesque.render({ cached_separator }, 'incline', {
                 backend_defaults = {
                     side = 'right',
                     left_separator = 'L',
                     right_separator = 'R',
                     separator_padding = '',
                 },
-            })[1][1],
+            })[1]),
             'R'
         )
     end)
@@ -865,15 +887,45 @@ describe('statuesque render spec', function()
 
         assert_equal(debug[1].align, 'right')
         assert_equal(debug[2].role, 'segment-leading-separator')
-        assert_gapped_leading_separator(debug[2], '')
+        assert_gapped_leading_separator(debug[2], '')
         assert_equal(debug[3].children[1].text, 'omega')
         assert_equal(debug[4].role, 'segment-trailing-separator')
-        assert_gapped_trailing_separator(debug[4], '')
+        assert_gapped_trailing_separator(debug[4], '')
         assert_equal(debug[5].role, 'segment-leading-separator')
-        assert_gapped_leading_separator(debug[5], '')
+        assert_gapped_leading_separator(debug[5], '')
         assert_equal(debug[6].children[1].text, 'tail')
         assert_equal(debug[7].role, 'right-edge-padding')
         assert_equal(debug[7].hl.bg, '#ffffff')
+        assert_equal(debug[2].children[1].hl.fg, debug[3].hl.bg)
+        assert_equal(debug[2].children[1].hl.bg, '#111111')
+        assert_equal(debug[4].children[2].hl.fg, debug[3].hl.bg)
+        assert_equal(debug[4].children[2].hl.bg, '#111111')
+        assert_equal(debug[5].children[1].hl.fg, debug[6].hl.bg)
+        assert_equal(debug[5].children[1].hl.bg, '#111111')
+    end)
+
+    it('puts the sigil at the outer edge for right-sided single-surface composition', function()
+        local debug = statuesque.render(
+            statuesque.compose({
+                { text = 'omega' },
+            }, {
+                surface = 'incline',
+                side = 'right',
+                sigil = 'S',
+                mode_style = false,
+                base = { fg = '#eeeeee', bg = '#111111' },
+                outer = { fg = '#000000', bg = '#ffffff' },
+                inner = { fg = '#ffffff', bg = '#000000' },
+            }),
+            'debug'
+        )
+
+        assert_equal(debug[1].role, 'segment-leading-separator')
+        assert_equal(debug[2].children[1].text, 'omega')
+        assert_equal(debug[3].role, 'sigil-trailing-separator')
+        assert_equal(debug[4].role, 'sigil-leading-separator')
+        assert_equal(debug[#debug].role, 'sigil')
+        assert_equal(debug[#debug].text, ' S  ')
     end)
 
     it('uses diagonal reverse separators for gapped tabline segment entry', function()
@@ -1173,6 +1225,77 @@ describe('statuesque render spec', function()
                 ('expected %s sigil bg %s to avoid mode colors'):format(surface, defaults.sigil_hl.bg)
             )
         end
+    end)
+
+    it('uses tabline slanted separators for winbar surfaces', function()
+        local defaults = style.backend_defaults('winbar', { style = 'slanted' })
+
+        assert_equal(defaults.left_separator, '')
+        assert_equal(defaults.right_separator, '')
+        assert_equal(defaults.inner_left_separator, '')
+        assert_equal(defaults.inner_right_separator, '')
+    end)
+
+    it('uses placement-specific slanted separators for window labels', function()
+        local top = style.backend_defaults('window_label', {
+            style = 'slanted',
+            placement = { vertical = 'top' },
+        })
+        local bottom = style.backend_defaults('window_label', {
+            style = 'slanted',
+            placement = { vertical = 'bottom' },
+        })
+
+        assert_equal(top.left_separator, '')
+        assert_equal(top.right_separator, '')
+        assert_equal(top.inner_left_separator, '')
+        assert_equal(top.inner_right_separator, '')
+        assert_equal(top.base.bg, nil)
+
+        assert_equal(bottom.left_separator, '')
+        assert_equal(bottom.right_separator, '')
+        assert_equal(bottom.inner_left_separator, '')
+        assert_equal(bottom.inner_right_separator, '')
+        assert_equal(bottom.base.bg, nil)
+    end)
+
+    it('renders window-label leading separators against a transparent base by default', function()
+        local debug = statuesque.render(
+            statuesque.compose({
+                { text = 'label' },
+            }, {
+                surface = 'window_label',
+                placement = { vertical = 'bottom' },
+                style = 'slanted',
+                sigil = '',
+            }),
+            'debug'
+        )
+
+        assert_equal(debug[1].role, 'segment-leading-separator')
+        assert_equal(debug[1].children[1].hl.bg, nil)
+        assert_equal(debug[1].children[1].hl.fg, debug[2].hl.bg)
+    end)
+
+    it('lets window-label config opt into an opaque base background', function()
+        local surfaces = require('statuesque.presets.default').surfaces({
+            preset = false,
+            window_label = {
+                background = '#101010',
+            },
+            surfaces = {
+                window_label = {
+                    right = {
+                        { text = 'label' },
+                    },
+                    backend = 'incline',
+                },
+            },
+        })
+        local debug = statuesque.render(surfaces.window_label, 'debug')
+
+        assert_equal(debug[1].children[1].hl.fg, debug[2].hl.bg)
+        assert_equal(debug[1].children[1].hl.bg, '#101010')
     end)
 
     it('composes right-hand sections with right-oriented separators', function()
@@ -1591,12 +1714,95 @@ describe('statuesque render spec', function()
             },
         }, 'incline')
 
-        assert_equal(rendered[1][1], 'Alpha')
+        assert_equal(incline_chunk_text(rendered[1]), 'Alpha')
         assert_equal(rendered[1].group, 'StatuesqueTab')
         assert_equal(rendered[1].statuesque.id, 'tab:1')
         assert_equal(rendered[1].statuesque.role, 'tab')
         assert_equal(rendered[1].statuesque.on_click, 'unsupported')
         assert_equal(rendered[1].statuesque.on_hover, 'unsupported')
+    end)
+
+    it('does not emit structured metadata on groupless Incline nodes', function()
+        local rendered = statuesque.render({
+            {
+                role = 'window-label',
+                'Alpha',
+            },
+        }, 'incline')
+
+        assert_equal(incline_chunk_text(rendered[1]), 'Alpha')
+        assert_equal(rendered[1].statuesque, nil)
+    end)
+
+    it('registers inline highlight groups for generated Incline table highlights', function()
+        local rendered = statuesque.render({
+            {
+                hl = { fg = '#112233', bg = '#445566', bold = true },
+                'Alpha',
+            },
+        }, 'incline')
+
+        assert_equal(incline_chunk_text(rendered[1]), 'Alpha')
+        assert_equal(rendered[1].group, 'StatuesqueIncline1')
+
+        local namespace = require('statuesque.render.incline').highlight_namespace()
+        local global = vim.api.nvim_get_hl(0, { name = 'StatuesqueIncline1', link = false })
+        local hl = vim.api.nvim_get_hl(namespace, { name = 'StatuesqueIncline1', link = false })
+        assert_equal(next(global), nil)
+        assert_equal(hl.fg, 0x112233)
+        assert_equal(hl.bg, 0x445566)
+        assert_equal(hl.bold, true)
+    end)
+
+    it('replays cached Incline inline highlight definitions', function()
+        local cached = {
+            id = 'cached-incline-highlight',
+            cache = { key = 'cached-incline-highlight' },
+            render = function()
+                return {
+                    hl = { fg = '#223344', bg = '#556677' },
+                    text = 'Cached',
+                }
+            end,
+        }
+
+        local first = statuesque.render({ cached }, 'incline')
+        assert_equal(first[1].group, 'StatuesqueIncline1')
+        local namespace = require('statuesque.render.incline').highlight_namespace()
+        vim.api.nvim_set_hl(namespace, 'StatuesqueIncline1', { fg = '#ffffff', bg = '#000000' })
+
+        local second = statuesque.render({ cached }, 'incline')
+        assert_equal(second[1].group, 'StatuesqueIncline1')
+
+        local hl = vim.api.nvim_get_hl(namespace, { name = 'StatuesqueIncline1', link = false })
+        assert_equal(hl.fg, 0x223344)
+        assert_equal(hl.bg, 0x556677)
+    end)
+
+    it('scopes generated Incline highlight groups per window', function()
+        local first = statuesque.render({
+            {
+                hl = { fg = '#101010', bg = '#202020' },
+                'Left',
+            },
+        }, 'incline', { winid = 11 })
+        local second = statuesque.render({
+            {
+                hl = { fg = '#303030', bg = '#404040' },
+                'Right',
+            },
+        }, 'incline', { winid = 22 })
+
+        assert_equal(first[1].group, 'StatuesqueInclineW11_1')
+        assert_equal(second[1].group, 'StatuesqueInclineW22_1')
+
+        local namespace = require('statuesque.render.incline').highlight_namespace()
+        local first_hl = vim.api.nvim_get_hl(namespace, { name = 'StatuesqueInclineW11_1', link = false })
+        local second_hl = vim.api.nvim_get_hl(namespace, { name = 'StatuesqueInclineW22_1', link = false })
+        assert_equal(first_hl.fg, 0x101010)
+        assert_equal(first_hl.bg, 0x202020)
+        assert_equal(second_hl.fg, 0x303030)
+        assert_equal(second_hl.bg, 0x404040)
     end)
 
     it('renders window-label widgets from the context buffer', function()
@@ -1698,6 +1904,67 @@ describe('statuesque render spec', function()
         assert_contains(rendered, ' 1')
         assert_contains(rendered, ' 2')
         assert_contains(rendered, ' 3')
+    end)
+
+    it('normalizes Git diff counts from common plugin buffer variables', function()
+        local previous_stratum = package.loaded['stratum']
+        package.loaded['stratum'] = {
+            path_summary = function()
+                return nil
+            end,
+        }
+        package.loaded['statuesque.widgets.git_diff'] = nil
+
+        local bufnr = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_buf_set_name(bufnr, ('/tmp/statuesque-git-diff-generic-%d.lua'):format(bufnr))
+        vim.b[bufnr].minidiff_summary = {
+            add = 5,
+            change = 4,
+            delete = 3,
+        }
+
+        local rendered = statuesque.render({
+            { name = 'git_diff' },
+        }, 'text', { bufnr = bufnr })
+
+        package.loaded['stratum'] = previous_stratum
+        package.loaded['statuesque.widgets.git_diff'] = nil
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+
+        assert_contains(rendered, ' 5')
+        assert_contains(rendered, ' 4')
+        assert_contains(rendered, ' 3')
+    end)
+
+    it('can render filename buffer-state flags as separate nodes', function()
+        local bufnr = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_buf_set_name(bufnr, ('/tmp/statuesque-filename-flags-%d.lua'):format(bufnr))
+        vim.api.nvim_buf_set_lines(bufnr, 0, -1, false, { 'local flags = true' })
+        vim.bo[bufnr].modified = true
+        vim.bo[bufnr].readonly = true
+
+        local debug = statuesque.render({
+            {
+                name = 'filename',
+                opts = {
+                    max_width = 48,
+                    separate_flags = true,
+                    modified_text = '[+]',
+                    readonly_text = '[-]',
+                    modified_hl = 'StatuesqueModifiedFilename',
+                },
+            },
+        }, 'debug', { bufnr = bufnr })
+
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+
+        assert_equal(debug[1].role, 'filename')
+        assert_equal(debug[1].hl, 'StatuesqueModifiedFilename')
+        assert_contains(debug[1].text, ('statuesque-filename-flags-%d.lua'):format(bufnr))
+        assert_equal(debug[2].role, 'filename-modified')
+        assert_equal(debug[2].text, '[+]')
+        assert_equal(debug[3].role, 'filename-readonly')
+        assert_equal(debug[3].text, '[-]')
     end)
 
     it('renders quickfix state for status surfaces', function()
@@ -2139,7 +2406,7 @@ describe('statuesque render spec', function()
         assert_equal(debug[1].hl, 'StatuesqueFileIconf8c97a')
     end)
 
-    it('lets the default preset drive incline window-label rendering', function()
+    it('lets the default preset drive the window-label surface through incline', function()
         local previous_incline = package.loaded.incline
         local setup_opts
         package.loaded.incline = {
@@ -2161,6 +2428,9 @@ describe('statuesque render spec', function()
             },
             surfaces = {
                 window_label = {
+                    placement = {
+                        vertical = 'top',
+                    },
                     backend = {
                         name = 'incline',
                         opts = {
@@ -2179,7 +2449,115 @@ describe('statuesque render spec', function()
         vim.api.nvim_buf_delete(bufnr, { force = true })
 
         assert_equal(setup_opts.window.zindex, 1)
+        assert_equal(setup_opts.window.placement.horizontal, 'right')
+        assert_equal(setup_opts.window.placement.vertical, 'top')
+        assert_equal(setup_opts.window.margin.horizontal.right, 0)
+        assert_equal(setup_opts.window.padding.right, 0)
         assert_contains(vim.inspect(rendered), ('statuesque-incline-label-%d.lua'):format(bufnr))
+    end)
+
+    it('lets top-level window-label config drive default preset placement', function()
+        local previous_incline = package.loaded.incline
+        local setup_opts
+        package.loaded.incline = {
+            setup = function(opts)
+                setup_opts = opts
+            end,
+        }
+
+        require('statuesque.presets.default').install({
+            preset = {
+                'default',
+                opts = {
+                    tabulature = false,
+                },
+            },
+            window_label = {
+                placement = {
+                    vertical = 'top',
+                },
+            },
+        })
+
+        package.loaded.incline = previous_incline
+
+        assert_equal(setup_opts.window.placement.vertical, 'top')
+    end)
+
+    it('composes right-sided incline preset surfaces without a fake left sigil', function()
+        local surfaces = require('statuesque.presets.default').surfaces({
+            preset = false,
+            surfaces = {
+                window_label = {
+                    right = {
+                        { text = 'omega' },
+                    },
+                    sigil = 'S',
+                    backend = {
+                        name = 'incline',
+                    },
+                },
+            },
+        })
+        local debug = statuesque.render(surfaces.window_label, 'debug')
+
+        assert_equal(debug[1].role, 'segment-leading-separator')
+        assert_equal(debug[2].children[1].text, 'omega')
+        assert_equal(debug[3].role, 'sigil-trailing-separator')
+        assert_equal(debug[4].role, 'sigil-leading-separator')
+        assert_equal(debug[#debug].role, 'sigil')
+        assert_equal(debug[#debug].text, ' S  ')
+    end)
+
+    it('disables winbar and window-label sigils in the default preset', function()
+        local surfaces = require('statuesque.presets.default').surfaces({
+            preset = {
+                'default',
+                opts = {
+                    tabulature = false,
+                },
+            },
+            surfaces = {
+                winbar = {
+                    left = {
+                        { text = 'crumb' },
+                    },
+                },
+                window_label = {
+                    right = {
+                        { text = 'label' },
+                    },
+                },
+            },
+        })
+
+        local winbar = statuesque.render(surfaces.winbar, 'debug')
+        local window_label = statuesque.render(surfaces.window_label, 'debug')
+
+        assert(winbar[1] == nil or winbar[1].role ~= 'sigil')
+        assert(window_label[1] == nil or window_label[#window_label].role ~= 'sigil')
+    end)
+
+    it('rejects backend placements not supported by target metadata', function()
+        local ok, err = pcall(function()
+            require('statuesque.presets.default').surfaces({
+                preset = false,
+                surfaces = {
+                    status = {
+                        left = { 'status' },
+                        placement = {
+                            vertical = 'top',
+                        },
+                        backend = {
+                            name = 'statusline',
+                        },
+                    },
+                },
+            })
+        end)
+
+        assert_equal(ok, false)
+        assert_contains(err, 'does not support vertical placement top')
     end)
 
     it('rejects incline surfaces with both left and right widget runs', function()
@@ -2329,6 +2707,67 @@ describe('statuesque render spec', function()
         vim.g.statusline_winid = previous_statusline_winid
     end)
 
+    it('replaces window-local render targets only while the owner buffer is visible', function()
+        local winid = vim.api.nvim_get_current_win()
+        local owner_bufnr = vim.api.nvim_create_buf(true, false)
+        local other_bufnr = vim.api.nvim_create_buf(true, false)
+        local previous_winbar = vim.o.winbar
+
+        vim.o.winbar = 'ambient-winbar'
+        vim.api.nvim_win_set_buf(winid, owner_bufnr)
+
+        local updated = statuesque.replace_window_surface({
+            owner = 'fixture',
+            target = 'winbar',
+            winid = winid,
+            bufnr = owner_bufnr,
+            expression = 'owned-winbar',
+        })
+
+        assert_equal(updated[1], winid)
+        assert_equal(vim.wo[winid].winbar, 'owned-winbar')
+
+        vim.api.nvim_win_set_buf(winid, other_bufnr)
+        vim.api.nvim_exec_autocmds('BufWinEnter', {
+            buffer = other_bufnr,
+            modeline = false,
+        })
+
+        assert_equal(vim.wo[winid].winbar, 'ambient-winbar')
+        vim.o.winbar = previous_winbar
+    end)
+
+    it('can replace a window-local render target for all windows displaying a buffer', function()
+        local first_win = vim.api.nvim_get_current_win()
+        local owner_bufnr = vim.api.nvim_create_buf(true, false)
+        local previous_winbar = vim.o.winbar
+
+        vim.o.winbar = 'ambient-winbar'
+        vim.api.nvim_win_set_buf(first_win, owner_bufnr)
+        vim.cmd('split')
+        local second_win = vim.api.nvim_get_current_win()
+        vim.api.nvim_win_set_buf(second_win, owner_bufnr)
+
+        local updated = statuesque.replace_window_surface({
+            owner = 'fixture',
+            target = 'winbar',
+            bufnr = owner_bufnr,
+            expression = 'owned-winbar',
+            all_windows = true,
+        })
+
+        table.sort(updated)
+
+        assert_equal(#updated, 2)
+        assert_equal(updated[1], math.min(first_win, second_win))
+        assert_equal(updated[2], math.max(first_win, second_win))
+        assert_equal(vim.wo[first_win].winbar, 'owned-winbar')
+        assert_equal(vim.wo[second_win].winbar, 'owned-winbar')
+
+        vim.cmd('close')
+        vim.o.winbar = previous_winbar
+    end)
+
     it('routes custom render targets through runtimepath backend discovery', function()
         package.loaded['statuesque.backend.demo_backend'] = nil
         package.preload['statuesque.backend.demo_backend'] = function()
@@ -2390,14 +2829,17 @@ describe('statuesque render spec', function()
         assert_equal(statusline.install, true)
         assert_equal(statusline.global_statusline, true)
         assert_equal(statusline.render_scope, 'global')
+        assert_equal(statusline.placement.vertical, 'bottom')
         assert_equal(tabline.target, 'tabline')
         assert_equal(tabline.install, true)
         assert_equal(tabline.render_scope, 'global')
+        assert_equal(tabline.placement.vertical, 'top')
         assert_equal(winbar.target, 'winbar')
         assert_equal(winbar.install, true)
         assert_equal(winbar.render_scope, 'window')
         assert_equal(winbar.window_context, true)
         assert_equal(winbar.buffer_context, true)
+        assert_equal(winbar.placement.vertical, 'top')
         assert_equal(text.highlights, false)
         assert_equal(text.clicks, false)
         assert_equal(text.hover, false)
@@ -2410,6 +2852,8 @@ describe('statuesque render spec', function()
         assert_equal(incline.click_degradation, 'metadata')
         assert_equal(incline.hover, false)
         assert_equal(incline.hover_degradation, 'metadata')
+        assert_equal(incline.placement.vertical.top, true)
+        assert_equal(incline.placement.vertical.bottom, true)
     end)
 
     it('preserves custom backend capabilities', function()
