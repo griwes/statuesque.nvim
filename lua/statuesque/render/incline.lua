@@ -41,6 +41,7 @@ local function defaults_variant(ctx)
         render_variant.encode_value(defaults.inner_left_separator),
         render_variant.encode_value(defaults.inner_right_separator),
         render_variant.encode_value(defaults.separator_padding),
+        render_variant.encode_value(defaults.edge_padding),
         render_variant.encode_value(defaults.side),
     }, '|')
 end

@@ -25,6 +25,7 @@ local KNOWN_FIELDS = {
     'separator',
     'separator_side',
     'custom_rendered',
+    'exact_highlight',
     '_statuesque_cache_key',
     '_statuesque_widget_spec',
 }

@@ -793,7 +793,7 @@ describe('statuesque render spec', function()
 
         assert_equal(debug[2].role, 'base-separator')
         assert_unpadded_separator(debug[2], '')
-        assert_equal(statuesque.render(debug, 'text'), ' 𝄞 tab')
+        assert_equal(statuesque.render(debug, 'text'), ' 𝄞 tab ')
     end)
 
     it('lets custom-rendered components suppress adjacent layout separators', function()
@@ -1007,6 +1007,7 @@ describe('statuesque render spec', function()
         local rendered = statuesque.render(composed, 'text')
 
         assert_contains(rendered, 'utf-8 unix 1:1 Top')
+        assert_ends_with(rendered, 'Top ')
         assert(not rendered:find(' utf%-8 unix ', 1, false), rendered)
         assert(not rendered:find('', 1, true), rendered)
         assert(not rendered:find(' 1:1 ', 1, true), rendered)
@@ -1256,6 +1257,31 @@ describe('statuesque render spec', function()
         assert_equal(bottom.right_separator, '')
         assert_equal(bottom.inner_left_separator, '')
         assert_equal(bottom.inner_right_separator, '')
+        assert_equal(bottom.base.bg, nil)
+    end)
+
+    it('uses placement-specific capsule colors for window labels', function()
+        local top = style.backend_defaults('window_label', {
+            style = 'capsule',
+            placement = { vertical = 'top' },
+        })
+        local bottom = style.backend_defaults('window_label', {
+            style = 'capsule',
+            placement = { vertical = 'bottom' },
+        })
+        local tabline = style.backend_defaults('tabline', { style = 'capsule' })
+        local statusline = style.backend_defaults('statusline', { style = 'capsule' })
+
+        assert_equal(top.left_separator, '')
+        assert_equal(top.right_separator, '')
+        assert_equal(top.outer.bg, tabline.outer.bg)
+        assert_equal(top.inner.bg, tabline.inner.bg)
+        assert_equal(top.base.bg, nil)
+
+        assert_equal(bottom.left_separator, '')
+        assert_equal(bottom.right_separator, '')
+        assert_equal(bottom.outer.bg, statusline.outer.bg)
+        assert_equal(bottom.inner.bg, statusline.inner.bg)
         assert_equal(bottom.base.bg, nil)
     end)
 
@@ -1826,8 +1852,7 @@ describe('statuesque render spec', function()
 
         local rendered = statuesque.render({
             { name = 'git_diff' },
-            { name = 'filetype', opts = { icon_only = true } },
-            { name = 'filename' },
+            { name = 'filename', opts = { filetype_icon = true } },
         }, 'text', { bufnr = bufnr })
 
         package.loaded['nvim-web-devicons'] = previous_devicons
@@ -1836,7 +1861,7 @@ describe('statuesque render spec', function()
         assert_contains(rendered, ' 2')
         assert_contains(rendered, ' 3')
         assert_contains(rendered, ' 1')
-        assert_contains(rendered, '')
+        assert_contains(rendered, (' statuesque-window-label-%d.lua +'):format(bufnr))
         assert_contains(rendered, ('statuesque-window-label-%d.lua +'):format(bufnr))
     end)
 
@@ -2240,17 +2265,43 @@ describe('statuesque render spec', function()
             'debug'
         )
 
-        assert_equal(debug[1].role, 'segment-leading-separator-chrome-outer')
-        assert_equal(debug[1].children[1].hl.fg, background)
-        assert_equal(debug[2].role, 'segment-leading-separator-chrome-inner')
-        assert_equal(debug[2].children[1].hl.bg, background)
-        assert_equal(debug[3].role, 'section')
-        assert(debug[3].hl.bg ~= background, debug[3].hl.bg)
-        assert_equal(debug[3].style.semantic_chrome.bg, background)
-        assert_equal(debug[4].role, 'segment-trailing-separator-chrome-outer')
-        assert_equal(debug[4].children[2].hl.bg, background)
-        assert_equal(debug[5].role, 'segment-trailing-separator-chrome-inner')
-        assert_equal(debug[5].children[1].hl.fg, background)
+        assert_equal(debug[1].role, 'segment-leading-separator-chrome-inner')
+        assert_equal(debug[1].children[1].hl.bg, background)
+        assert_equal(debug[2].role, 'section')
+        assert(debug[2].hl.bg ~= background, debug[2].hl.bg)
+        assert_equal(debug[2].style.semantic_chrome.bg, background)
+        assert_equal(debug[3].role, 'segment-trailing-separator-chrome-outer')
+        assert_equal(debug[3].children[1].role, 'segment-trailing-separator-chrome-outer-padding-before')
+        assert_equal(debug[3].children[1].text, ' ')
+        assert_equal(debug[3].children[1].hl.bg, debug[2].hl.bg)
+        assert_equal(debug[3].children[2].role, 'segment-trailing-separator-chrome-outer-glyph')
+        assert_equal(debug[3].children[2].hl.bg, background)
+        assert_equal(debug[4], nil)
+    end)
+
+    it('keeps right-edge partial chrome flush with the surface edge', function()
+        local debug = statuesque.render(
+            statuesque.compose({
+                {
+                    { text = 'lua', hl = { fg = '#7aa2f7' }, exact_highlight = true },
+                },
+            }, {
+                surface = 'window_label',
+                style = 'capsule',
+                placement = { vertical = 'bottom' },
+                side = 'right',
+                sigil = '',
+                palette = false,
+                outer = { fg = '#ffffff', bg = '#7aa2f7' },
+                inner = { fg = '#ffffff', bg = '#7aa2f7' },
+            }),
+            'debug'
+        )
+
+        assert_equal(debug[#debug].role, 'segment-trailing-separator-chrome-outer')
+        assert_equal(debug[#debug].children[1].role, 'segment-trailing-separator-chrome-outer-padding-before')
+        assert_equal(debug[#debug].children[1].text, ' ')
+        assert_equal(debug[#debug].children[2].role, 'segment-trailing-separator-chrome-outer-glyph')
     end)
 
     it('chromes adjacent exits from darkened semantic sections', function()
@@ -2383,27 +2434,74 @@ describe('statuesque render spec', function()
         assert_equal(matched, '#f8c97a')
     end)
 
-    it('uses the Statuesque palette as a devicon color harmony hint', function()
+    it('uses the exact devicon color for filename filetype icons', function()
         local previous_devicons = package.loaded['nvim-web-devicons']
-        local config = require('statuesque.config')
-        local previous_config = vim.deepcopy(config.config)
-
         package.loaded['nvim-web-devicons'] = {
             get_icon_color_by_filetype = function()
                 return '', '#51a0cf'
             end,
         }
-        config.configure({ palette = { '#f8c97a' } })
 
         local bufnr = vim.api.nvim_create_buf(true, false)
         vim.bo[bufnr].filetype = 'lua'
-        local debug = statuesque.render({ name = 'filetype', opts = { icon_only = true } }, 'debug', { bufnr = bufnr })
+        local debug = statuesque.render(
+            statuesque.compose({ { text = 'OK' }, { name = 'filename', opts = { filetype_icon = true } } }, {
+                surface = 'window_label',
+                style = 'capsule',
+                placement = { vertical = 'bottom' },
+                sigil = '',
+            }),
+            'debug',
+            { bufnr = bufnr }
+        )
+
+        local function find_role(nodes, role)
+            for _, node in ipairs(nodes or {}) do
+                if node.role == role then
+                    return node
+                end
+                local found = find_role(node.children, role)
+                if found ~= nil then
+                    return found
+                end
+            end
+            return nil
+        end
+
+        local icon = find_role(debug, 'filetype-icon')
+        local filename = find_role(debug, 'filename')
+        assert_equal(icon.exact_highlight, true)
+        assert_equal(icon.hl.fg, '#51a0cf')
+        assert(icon.hl.bg ~= '#7aa2f7', ('expected exact icon to darken background, got %s'):format(icon.hl.bg))
+        assert_equal(filename.children[2].text, ' ')
+        assert_equal(filename.children[3].role, 'filename')
+
+        local incline = statuesque.render(
+            statuesque.compose({ { text = 'OK' }, { name = 'filename', opts = { filetype_icon = true } } }, {
+                surface = 'window_label',
+                style = 'slanted',
+                placement = { vertical = 'bottom' },
+                side = 'right',
+                sigil = '',
+            }),
+            'incline',
+            { bufnr = bufnr, winid = 17 }
+        )
+        local roles = {}
+        for index, chunk in ipairs(incline) do
+            if type(chunk) == 'table' and type(chunk.statuesque) == 'table' then
+                roles[chunk.statuesque.role] = roles[chunk.statuesque.role] or index
+            end
+        end
+
+        assert(
+            roles['segment-leading-separator-chrome-outer-glyph']
+                < roles['segment-leading-separator-chrome-inner-glyph']
+        )
+        assert(roles['segment-leading-separator-chrome-inner-glyph'] < roles['filetype-icon'])
 
         package.loaded['nvim-web-devicons'] = previous_devicons
-        config.config = previous_config
         vim.api.nvim_buf_delete(bufnr, { force = true })
-
-        assert_equal(debug[1].hl, 'StatuesqueFileIconf8c97a')
     end)
 
     it('lets the default preset drive the window-label surface through incline', function()

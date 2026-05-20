@@ -24,6 +24,7 @@ local function defaults_variant(ctx)
         encode_variant_value(defaults.inner_left_separator),
         encode_variant_value(defaults.inner_right_separator),
         encode_variant_value(defaults.separator_padding),
+        encode_variant_value(defaults.edge_padding),
         encode_variant_value(defaults.side),
     }, '|')
 end

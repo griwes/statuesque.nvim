@@ -89,6 +89,7 @@
 --- @field separator_side? statuesque.Side
 --- @field separator_text? string
 --- @field custom_rendered? boolean When true, composed bars pass this node through without generated section separators.
+--- @field exact_highlight? boolean Preserve explicit foreground colors through composed-section contrast repair.
 --- @field on_click? statuesque.ClickAction
 --- @field on_hover? statuesque.HoverAction
 --- @field id? string
@@ -159,6 +160,7 @@
 --- @field inner_left_separator? string
 --- @field inner_right_separator? string
 --- @field separator_padding? string
+--- @field edge_padding? string
 --- @field sigil_leading_padding? string
 --- @field sigil_padding? string
 --- @field gap_padding? string
@@ -296,6 +298,8 @@
 --- @field separate_flags? boolean Return filename and buffer-state flags as separate render nodes.
 --- @field modified_hl? statuesque.Highlight Highlight applied to the filename node when the buffer is modified.
 --- @field max_width? integer
+--- @field filetype_icon? boolean|table Include the current buffer's filetype icon before the filename.
+--- @field filetype_icon_separator? string Separator between the filetype icon and filename.
 
 --- @class statuesque.WidgetDiagnosticsOptions
 --- @field labels? table<integer, string>
@@ -309,7 +313,6 @@
 
 --- @class statuesque.WidgetFiletypeOptions
 --- @field icon? string|boolean
---- @field icon_only? boolean
 --- @field icon_separator? string
 --- @field devicons? boolean
 

@@ -98,6 +98,7 @@ local DEFAULTS = {
         separator_padding = ' ',
         sigil_leading_padding = ' ',
         gap_padding = '',
+        edge_padding = ' ',
         base = { fg = '#565f89', bg = '#1f2335' },
         outer = { fg = '#1a1b26', bg = '#7aa2f7', bold = true },
         inner = { fg = '#c0caf5', bg = '#3b4261' },
@@ -113,6 +114,7 @@ local DEFAULTS = {
         separator_padding = ' ',
         sigil_leading_padding = ' ',
         gap_padding = '',
+        edge_padding = ' ',
         base = { fg = '#565f89', bg = '#1f2335' },
         outer = { fg = '#1a1b26', bg = '#bb9af7', bold = true },
         inner = { fg = '#c0caf5', bg = '#292e42' },
@@ -127,6 +129,7 @@ local DEFAULTS = {
         separator_padding = ' ',
         sigil_leading_padding = ' ',
         gap_padding = '',
+        edge_padding = ' ',
         base = { fg = '#565f89', bg = '#1f2335' },
         outer = { fg = '#7dcfff', bg = '#24283b', bold = true },
         inner = { fg = '#a9b1d6', bg = '#1f2335' },
@@ -141,6 +144,7 @@ local DEFAULTS = {
         separator_padding = ' ',
         sigil_leading_padding = ' ',
         gap_padding = '',
+        edge_padding = ' ',
         side = 'left',
         base = { fg = '#565f89' },
         outer = { fg = '#7aa2f7', bg = '#24283b', bold = true },
@@ -156,6 +160,7 @@ local DEFAULTS = {
         separator_padding = ' ',
         sigil_leading_padding = ' ',
         gap_padding = '',
+        edge_padding = ' ',
         side = 'left',
         base = { fg = '#565f89', bg = '#1f2335' },
         outer = { fg = '#7aa2f7', bg = '#24283b', bold = true },
@@ -228,6 +233,7 @@ local STYLE_DEFAULTS = {
             separator_padding = '',
             sigil_padding = ' ',
             gap_padding = ' ',
+            edge_padding = ' ',
             right_gapped_separator = 'left',
             sigil = '',
         },
@@ -239,6 +245,7 @@ local STYLE_DEFAULTS = {
             separator_padding = '',
             sigil_padding = ' ',
             gap_padding = ' ',
+            edge_padding = ' ',
             right_gapped_separator = 'left',
             sigil = '',
             tabulature_sigil = '𝄞',
@@ -251,6 +258,7 @@ local STYLE_DEFAULTS = {
             separator_padding = '',
             sigil_padding = ' ',
             gap_padding = ' ',
+            edge_padding = ' ',
             right_gapped_separator = 'left',
         },
         window_label = {
@@ -261,7 +269,38 @@ local STYLE_DEFAULTS = {
             separator_padding = '',
             sigil_padding = ' ',
             gap_padding = ' ',
+            edge_padding = ' ',
             right_gapped_separator = 'left',
+            placement_defaults = {
+                top = {
+                    left_separator = '',
+                    right_separator = '',
+                    inner_left_separator = '',
+                    inner_right_separator = '',
+                    separator_padding = '',
+                    sigil_padding = ' ',
+                    gap_padding = ' ',
+                    edge_padding = ' ',
+                    right_gapped_separator = 'left',
+                    base = { fg = '#565f89' },
+                    outer = { fg = '#1a1b26', bg = '#bb9af7', bold = true },
+                    inner = { fg = '#c0caf5', bg = '#292e42' },
+                },
+                bottom = {
+                    left_separator = '',
+                    right_separator = '',
+                    inner_left_separator = '',
+                    inner_right_separator = '',
+                    separator_padding = '',
+                    sigil_padding = ' ',
+                    gap_padding = ' ',
+                    edge_padding = ' ',
+                    right_gapped_separator = 'left',
+                    base = { fg = '#565f89' },
+                    outer = { fg = '#1a1b26', bg = '#7aa2f7', bold = true },
+                    inner = { fg = '#c0caf5', bg = '#3b4261' },
+                },
+            },
         },
         incline = {
             left_separator = '',
@@ -271,6 +310,7 @@ local STYLE_DEFAULTS = {
             separator_padding = '',
             sigil_padding = ' ',
             gap_padding = ' ',
+            edge_padding = ' ',
             right_gapped_separator = 'left',
         },
     },
@@ -1560,6 +1600,7 @@ end
 
 --- @class statuesque.SemanticForegroundSource
 --- @field fg string
+--- @field exact? boolean
 
 --- @class statuesque.SemanticSectionLevel
 --- @field hl statuesque.HighlightSpec
@@ -1572,7 +1613,7 @@ local function collect_inherited_background_foregrounds(nodes, inherited, output
     for _, node in ipairs(nodes) do
         local node_hl, has_explicit_foreground, has_explicit_background = resolve_section_highlight(node.hl, inherited)
         if has_explicit_foreground and not has_explicit_background and node_hl.fg ~= nil then
-            output[#output + 1] = { fg = node_hl.fg }
+            output[#output + 1] = { fg = node_hl.fg, exact = node.exact_highlight == true }
         end
 
         if node.children ~= nil then
@@ -1606,7 +1647,7 @@ end
 local function semantic_sources_key(sources)
     local colors = {}
     for index, source in ipairs(sources) do
-        colors[index] = source.fg
+        colors[index] = ('%s:%s'):format(source.fg, tostring(source.exact == true))
     end
     return table.concat(colors, ',')
 end
@@ -1653,7 +1694,26 @@ end
 --- @param opts statuesque.ComposeOptions
 --- @return statuesque.SemanticSectionLevel
 local function semantic_section_level(level, base, sources, opts)
-    if #sources < 2 or type(level.bg) ~= 'string' or type(base.bg) ~= 'string' or level.bg == base.bg then
+    local has_exact_source = false
+    for _, source in ipairs(sources) do
+        if source.exact == true then
+            has_exact_source = true
+            break
+        end
+    end
+    local repair_base_bg = base.bg
+    if type(repair_base_bg) ~= 'string' and has_exact_source and type(level.bg) == 'string' then
+        repair_base_bg = preferred_direction_for_background(level.bg, opts) == 'dark' and DEFAULT_READABLE_DARK
+            or DEFAULT_READABLE_LIGHT
+    end
+
+    if
+        #sources == 0
+        or (#sources < 2 and not has_exact_source)
+        or type(level.bg) ~= 'string'
+        or type(repair_base_bg) ~= 'string'
+        or level.bg == repair_base_bg
+    then
         return { hl = level }
     end
 
@@ -1684,7 +1744,7 @@ local function semantic_section_level(level, base, sources, opts)
 
     for step = 0, 20 do
         local mix = step / 20
-        local bg = M.interpolate_color(level.bg, base.bg, mix)
+        local bg = M.interpolate_color(level.bg, repair_base_bg, mix)
         if bg ~= nil then
             local readable = 0
             local worst = math.huge
@@ -1728,12 +1788,16 @@ local function semantic_section_level(level, base, sources, opts)
 end
 
 --- @param opts? statuesque.ComposeOptions
---- @param hl statuesque.Highlight?
+--- @param node statuesque.NormalizedNode
 --- @param inherited statuesque.HighlightSpec
 --- @param repair_plan? statuesque.SemanticRepairPlan
 --- @return statuesque.HighlightSpec
-local function inherit_section_highlight(opts, hl, inherited, repair_plan)
-    local next_hl, has_explicit_foreground = resolve_section_highlight(hl, inherited)
+local function inherit_section_highlight(opts, node, inherited, repair_plan)
+    local next_hl, has_explicit_foreground = resolve_section_highlight(node.hl, inherited)
+    if node.exact_highlight == true then
+        return next_hl
+    end
+
     local readable_opts = opts
 
     if has_explicit_foreground and next_hl.fg ~= nil and next_hl.bg ~= nil then
@@ -1766,7 +1830,7 @@ local function inherit_section_backgrounds(opts, nodes, inherited)
 
     for index, node in ipairs(nodes) do
         local next_node = copy(node)
-        local node_hl = inherit_section_highlight(opts, next_node.hl, inherited, repair_plan)
+        local node_hl = inherit_section_highlight(opts, next_node, inherited, repair_plan)
 
         next_node.hl = node_hl
 
@@ -2035,6 +2099,7 @@ end
 --- @param normal_padding? string|{ before?: string, after?: string }
 --- @param first_padding? string|{ before?: string, after?: string }
 --- @param second_padding? string|{ before?: string, after?: string }
+--- @param reverse_order? boolean
 local function append_chromed_separator(
     nodes,
     role,
@@ -2046,17 +2111,59 @@ local function append_chromed_separator(
     side,
     normal_padding,
     first_padding,
-    second_padding
+    second_padding,
+    reverse_order
 )
     if chrome_hl == nil then
         nodes[#nodes + 1] = separator_node(role, text, left_hl, right_hl, defaults, side, normal_padding)
         return
     end
 
-    nodes[#nodes + 1] =
-        separator_node(role .. '-chrome-outer', text, left_hl, chrome_hl, defaults, side, first_padding or '')
-    nodes[#nodes + 1] =
+    local outer = separator_node(role .. '-chrome-outer', text, left_hl, chrome_hl, defaults, side, first_padding or '')
+    local inner =
         separator_node(role .. '-chrome-inner', text, chrome_hl, right_hl, defaults, side, second_padding or '')
+    if reverse_order == true then
+        nodes[#nodes + 1] = inner
+        nodes[#nodes + 1] = outer
+        return
+    end
+
+    nodes[#nodes + 1] = outer
+    nodes[#nodes + 1] = inner
+end
+
+--- @param nodes statuesque.NormalizedNode[]
+--- @param role string
+--- @param text string
+--- @param left_hl statuesque.Highlight
+--- @param right_hl statuesque.Highlight
+--- @param chrome_hl statuesque.HighlightSpec?
+--- @param defaults statuesque.BackendDefaults
+--- @param side statuesque.Side
+--- @param half 'outer'|'inner'
+--- @param padding? string|{ before?: string, after?: string }
+local function append_partial_chromed_separator(
+    nodes,
+    role,
+    text,
+    left_hl,
+    right_hl,
+    chrome_hl,
+    defaults,
+    side,
+    half,
+    padding
+)
+    local node
+    if chrome_hl == nil then
+        node = separator_node(role, text, left_hl, right_hl, defaults, side, padding)
+    elseif half == 'outer' then
+        node = separator_node(role .. '-chrome-outer', text, left_hl, chrome_hl, defaults, side, padding or '')
+    else
+        node = separator_node(role .. '-chrome-inner', text, chrome_hl, right_hl, defaults, side, padding or '')
+    end
+    node.style = vim.tbl_extend('force', node.style or {}, { edge_chrome = true })
+    nodes[#nodes + 1] = node
 end
 
 --- @param node statuesque.NormalizedNode
@@ -2236,7 +2343,15 @@ end
 --- @param defaults statuesque.BackendDefaults
 --- @return statuesque.NormalizedNode[]
 local function append_right_edge_padding(nodes, defaults)
-    local padding = defaults.separator_padding or ''
+    local final = nodes[#nodes]
+    if final ~= nil and final.style ~= nil and final.style.edge_chrome == true then
+        return nodes
+    end
+
+    local padding = defaults.edge_padding
+    if padding == nil then
+        padding = defaults.separator_padding or ''
+    end
     if padding == '' then
         return nodes
     end
@@ -2254,6 +2369,17 @@ local function append_right_edge_padding(nodes, defaults)
 
     nodes[#nodes + 1] = padding_node
     return nodes
+end
+
+--- @param defaults statuesque.BackendDefaults
+--- @return string
+local function edge_chrome_close_padding(defaults)
+    local padding = defaults.separator_padding or ''
+    if padding ~= '' then
+        return padding
+    end
+
+    return defaults.edge_padding or ''
 end
 
 --- @type table<string, string>
@@ -2311,35 +2437,65 @@ local function append_gapped_left(nodes, prepared, levels, defaults, surface, si
         if
             not prepared_component.custom_rendered and not (prepared[index - 1] and prepared[index - 1].custom_rendered)
         then
-            append_chromed_separator(
-                nodes,
-                'segment-leading-separator',
-                leading_separator,
-                base_hl,
-                level,
-                chrome,
-                defaults,
-                'right',
-                { after = separator_padding },
-                '',
-                { after = separator_padding }
-            )
+            if chrome ~= nil and not sigil_added and index == 1 then
+                append_partial_chromed_separator(
+                    nodes,
+                    'segment-leading-separator',
+                    leading_separator,
+                    base_hl,
+                    level,
+                    chrome,
+                    defaults,
+                    'right',
+                    'inner',
+                    { after = separator_padding }
+                )
+            else
+                append_chromed_separator(
+                    nodes,
+                    'segment-leading-separator',
+                    leading_separator,
+                    base_hl,
+                    level,
+                    chrome,
+                    defaults,
+                    'right',
+                    { after = separator_padding },
+                    '',
+                    { after = separator_padding }
+                )
+            end
         end
         nodes[#nodes + 1] = section_node(prepared_component, level, index, surface, opts, chrome)
         if not prepared_component.custom_rendered then
-            append_chromed_separator(
-                nodes,
-                'segment-trailing-separator',
-                trailing_separator,
-                level,
-                base_hl,
-                chrome,
-                defaults,
-                'left',
-                { before = separator_padding },
-                { before = separator_padding },
-                ''
-            )
+            if chrome ~= nil and index == #prepared then
+                append_partial_chromed_separator(
+                    nodes,
+                    'segment-trailing-separator',
+                    trailing_separator,
+                    level,
+                    base_hl,
+                    chrome,
+                    defaults,
+                    'left',
+                    'outer',
+                    { before = edge_chrome_close_padding(defaults) }
+                )
+            else
+                append_chromed_separator(
+                    nodes,
+                    'segment-trailing-separator',
+                    trailing_separator,
+                    level,
+                    base_hl,
+                    chrome,
+                    defaults,
+                    'left',
+                    { before = separator_padding },
+                    { before = separator_padding },
+                    ''
+                )
+            end
         end
         if
             gap_padding ~= ''
@@ -2412,7 +2568,8 @@ local function append_gapped_right(nodes, prepared, levels, defaults, surface, o
                 entry_side,
                 { after = separator_padding },
                 '',
-                { after = separator_padding }
+                { after = separator_padding },
+                true
             )
             append_chromed_separator(
                 nodes,
@@ -2429,7 +2586,8 @@ local function append_gapped_right(nodes, prepared, levels, defaults, surface, o
                 {
                     before = separator_padding,
                 },
-                ''
+                '',
+                true
             )
         elseif index > 1 and not prepared_component.custom_rendered and not prepared[index - 1].custom_rendered then
             append_chromed_separator(
@@ -2447,24 +2605,54 @@ local function append_gapped_right(nodes, prepared, levels, defaults, surface, o
                 {
                     before = separator_padding,
                 },
-                ''
+                '',
+                true
+            )
+        elseif index == 1 and chrome ~= nil and not prepared_component.custom_rendered then
+            append_partial_chromed_separator(
+                nodes,
+                'segment-trailing-separator',
+                exit_separator,
+                level,
+                base_hl,
+                chrome,
+                defaults,
+                exit_side,
+                'outer',
+                { before = edge_chrome_close_padding(defaults) }
             )
         end
         nodes[#nodes + 1] = section_node(prepared_component, level, index, surface, opts, chrome)
         if not prepared_component.custom_rendered then
-            append_chromed_separator(
-                nodes,
-                'segment-leading-separator',
-                entry_separator,
-                base_hl,
-                level,
-                chrome,
-                defaults,
-                entry_side,
-                { after = separator_padding },
-                '',
-                { after = separator_padding }
-            )
+            if chrome ~= nil and index == #prepared then
+                append_partial_chromed_separator(
+                    nodes,
+                    'segment-leading-separator',
+                    entry_separator,
+                    base_hl,
+                    level,
+                    chrome,
+                    defaults,
+                    entry_side,
+                    'inner',
+                    { after = separator_padding }
+                )
+            else
+                append_chromed_separator(
+                    nodes,
+                    'segment-leading-separator',
+                    entry_separator,
+                    base_hl,
+                    level,
+                    chrome,
+                    defaults,
+                    entry_side,
+                    { after = separator_padding },
+                    '',
+                    { after = separator_padding },
+                    true
+                )
+            end
         end
         if
             gap_padding ~= ''

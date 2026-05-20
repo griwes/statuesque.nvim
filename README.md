@@ -108,10 +108,10 @@ require('statuesque').setup({
             left = {
                 { name = 'diagnostics', opts = { empty = false, signs = true } },
                 { name = 'git_diff' },
-                { name = 'filetype', opts = { icon_only = true } },
                 {
                     name = 'filename',
                     opts = {
+                        filetype_icon = true,
                         max_width = 48,
                         separate_flags = true,
                         modified_text = '[+]',
