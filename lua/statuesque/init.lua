@@ -2,6 +2,17 @@ local M = {
     _providers = {},
     _surfaces = {},
     _pending_manifold_status = {},
+    _installed_options = {},
+    _preset_surfaces = {},
+    _visual_hooks_installed = false,
+    _surface_config = nil,
+    _surface_plan = nil,
+}
+
+local TARGET_OPTIONS = {
+    statusline = { option = 'statusline', companion = 'laststatus', companion_value = 3 },
+    tabline = { option = 'tabline', companion = 'showtabline', companion_value = 2 },
+    winbar = { option = 'winbar' },
 }
 
 --- @return statuesque.PublishConfig
@@ -73,15 +84,144 @@ local function manifold_options(value)
     return {}
 end
 
+local function refresh_visual_state()
+    require('statuesque.cache').invalidate()
+    require('statuesque.style').define_default_highlights()
+    pcall(vim.cmd, 'redrawstatus')
+    pcall(vim.cmd, 'redrawtabline')
+    local ok, incline = pcall(require, 'incline')
+    if ok and type(incline.refresh) == 'function' then
+        pcall(incline.refresh)
+    end
+end
+
+local function install_visual_hooks()
+    if M._visual_hooks_installed then
+        return
+    end
+    M._visual_hooks_installed = true
+    local group = vim.api.nvim_create_augroup('StatuesqueVisualState', { clear = true })
+    vim.api.nvim_create_autocmd('ColorScheme', {
+        group = group,
+        callback = refresh_visual_state,
+    })
+end
+
+local function uninstall_surfaces()
+    for target, record in pairs(M._installed_options) do
+        local descriptor = TARGET_OPTIONS[target]
+        if descriptor ~= nil then
+            if vim.o[descriptor.option] == record.expression then
+                vim.o[descriptor.option] = record.option
+            end
+            if descriptor.companion ~= nil and vim.o[descriptor.companion] == record.companion_value then
+                vim.o[descriptor.companion] = record.companion
+            end
+        end
+        require('statuesque.clicks').uninstall_target(target)
+        require('statuesque.hovers').uninstall_surface(target)
+    end
+    M._installed_options = {}
+    require('statuesque.integrations.incline').disable()
+end
+
+local function copy_map(value, deep)
+    local copied = {}
+    for key, item in pairs(value) do
+        if deep and type(item) == 'table' then
+            copied[key] = vim.deepcopy(item)
+        else
+            copied[key] = item
+        end
+    end
+    return copied
+end
+
+local function capture_installed_option_values()
+    local values = {}
+    for target in pairs(M._installed_options) do
+        local descriptor = TARGET_OPTIONS[target]
+        if descriptor ~= nil then
+            values[target] = {
+                option = vim.o[descriptor.option],
+                companion = descriptor.companion and vim.o[descriptor.companion] or nil,
+            }
+        end
+    end
+    return values
+end
+
+local function restore_surface_state(state)
+    uninstall_surfaces()
+    require('statuesque.config').configure(state.config)
+    require('statuesque.style').define_default_highlights()
+    M._surfaces = state.surfaces
+    M._preset_surfaces = state.preset_surfaces
+    M._surface_config = state.surface_config
+    M._surface_plan = state.surface_plan
+
+    if state.surface_plan ~= nil then
+        require('statuesque.presets.default').install(state.surface_config, state.surface_plan)
+    end
+    for target, record in pairs(state.installed_options) do
+        if M._installed_options[target] == nil and record.surface ~= nil then
+            M.install_surface(record.surface, target)
+        end
+    end
+    for target, values in pairs(state.option_values) do
+        local descriptor = TARGET_OPTIONS[target]
+        vim.o[descriptor.option] = values.option
+        if descriptor.companion ~= nil then
+            vim.o[descriptor.companion] = values.companion
+        end
+    end
+end
+
 --- Configure Statuesque and optional preset / Manifold integrations.
 --- @param config? statuesque.SetupConfig
 function M.setup(config)
     config = config or {}
-    require('statuesque.config').configure(config)
-    require('statuesque.style').define_default_highlights()
+    local reconfigure_surfaces = config.surfaces ~= nil or config.preset ~= nil
+    if reconfigure_surfaces then
+        local default_preset = require('statuesque.presets.default')
+        local prepared = default_preset.prepare(config)
+        local previous_state = {
+            config = vim.deepcopy(require('statuesque.config').config),
+            surfaces = copy_map(M._surfaces),
+            preset_surfaces = copy_map(M._preset_surfaces),
+            installed_options = copy_map(M._installed_options, true),
+            option_values = capture_installed_option_values(),
+            surface_config = M._surface_config,
+            surface_plan = M._surface_plan,
+        }
+        local ok, err = xpcall(function()
+            uninstall_surfaces()
+            for surface in pairs(M._preset_surfaces) do
+                M._surfaces[surface] = nil
+            end
+            M._preset_surfaces = {}
+            require('statuesque.config').configure(config)
+            require('statuesque.style').define_default_highlights()
+            install_visual_hooks()
 
-    if config.surfaces ~= nil or (config.preset ~= nil and config.preset ~= false) then
-        require('statuesque.presets.default').install(config)
+            local surfaces = default_preset.install(config, prepared)
+            for surface in pairs(surfaces) do
+                M._preset_surfaces[surface] = true
+            end
+            M._surface_config = config
+            M._surface_plan = prepared
+        end, debug.traceback)
+        if not ok then
+            local rollback_ok, rollback_err = pcall(restore_surface_state, previous_state)
+            if not rollback_ok then
+                error(('%s\nStatuesque setup rollback failed: %s'):format(err, rollback_err), 0)
+            end
+            error(err, 0)
+        end
+    else
+        require('statuesque.config').configure(config)
+        require('statuesque.style').define_default_highlights()
+        install_visual_hooks()
     end
 
     if config.manifold ~= false then
@@ -187,7 +327,12 @@ end
 --- @param opts? statuesque.RenderContext
 --- @return any
 function M.render_surface(surface, target, opts)
-    local context = require('statuesque.context').with_target(opts, target or 'text')
+    local context = require('statuesque.context').with_target(
+        vim.tbl_extend('force', opts or {}, {
+            surface = surface,
+        }),
+        target or 'text'
+    )
     return M.render(M.resolve_surface(surface, context), target, context)
 end
 
@@ -199,6 +344,7 @@ end
 function M.render_installed_surface(surface, target)
     local context = require('statuesque.context').with_target({
         surface = surface,
+        _statuesque_installed_render = true,
     }, target)
     return M.render_surface(surface, target, context)
 end
@@ -226,27 +372,29 @@ end
 --- @param target 'statusline'|'tabline'|'winbar'
 --- @return nil
 function M.install_surface(surface, target)
+    local descriptor = TARGET_OPTIONS[target]
+    if descriptor == nil then
+        error(('unsupported install target: %s'):format(target))
+    end
     local expression = M.surface_expression(surface, target)
+    if M._installed_options[target] == nil then
+        M._installed_options[target] = {
+            option = vim.o[descriptor.option],
+            companion = descriptor.companion and vim.o[descriptor.companion] or nil,
+            companion_value = descriptor.companion_value,
+            expression = expression,
+            surface = surface,
+        }
+    else
+        M._installed_options[target].expression = expression
+        M._installed_options[target].surface = surface
+    end
     require('statuesque.hovers').install_surface(surface, target)
 
-    if target == 'statusline' then
-        vim.o.laststatus = 3
-        vim.o.statusline = expression
-        return
+    if descriptor.companion ~= nil then
+        vim.o[descriptor.companion] = descriptor.companion_value
     end
-
-    if target == 'tabline' then
-        vim.o.showtabline = 2
-        vim.o.tabline = expression
-        return
-    end
-
-    if target == 'winbar' then
-        vim.o.winbar = expression
-        return
-    end
-
-    error(('unsupported install target: %s'):format(target))
+    vim.o[descriptor.option] = expression
 end
 
 ---Replace a window-local render target while a window displays a given buffer.

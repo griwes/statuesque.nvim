@@ -32,7 +32,5 @@ return function(opts)
             group = group,
             callback = notify,
         })
-    end, {
-        cache = { key = opts.cache_key or 'statuesque.widget.mode' },
-    })
+    end)
 end

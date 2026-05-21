@@ -346,6 +346,46 @@ local function strcharpart(value, start, length)
     return value:sub(start + 1, start + length)
 end
 
+--- @param value string
+--- @return integer
+local function display_width(value)
+    if vim and vim.fn and vim.fn.strdisplaywidth then
+        return vim.fn.strdisplaywidth(value)
+    end
+    return strchars(value)
+end
+
+--- @param value string
+--- @param width integer
+--- @return string
+local function prefix_within(value, width)
+    local result = ''
+    for length = 1, strchars(value) do
+        local candidate = strcharpart(value, 0, length)
+        if display_width(candidate) > width then
+            break
+        end
+        result = candidate
+    end
+    return result
+end
+
+--- @param value string
+--- @param width integer
+--- @return string
+local function suffix_within(value, width)
+    local chars = strchars(value)
+    local result = ''
+    for start = chars - 1, 0, -1 do
+        local candidate = strcharpart(value, start, chars - start)
+        if display_width(candidate) > width then
+            break
+        end
+        result = candidate
+    end
+    return result
+end
+
 --- Apply a node's truncation policy to already-rendered text.
 --- @param text string
 --- @param node statuesque.NormalizedNode
@@ -356,7 +396,7 @@ function M.truncate_text(text, node)
     end
 
     local max_width = math.max(0, tonumber(node.max_width) or 0)
-    if strchars(text) <= max_width then
+    if display_width(text) <= max_width then
         return text
     end
 
@@ -367,23 +407,23 @@ function M.truncate_text(text, node)
 
     if max_width <= 3 then
         if mode == 'left' then
-            return strcharpart(text, strchars(text) - max_width, max_width)
+            return suffix_within(text, max_width)
         end
 
-        return strcharpart(text, 0, max_width)
+        return prefix_within(text, max_width)
     end
 
     if mode == 'left' then
-        return '...' .. strcharpart(text, strchars(text) - max_width + 3, max_width - 3)
+        return '...' .. suffix_within(text, max_width - 3)
     end
 
     if mode == 'middle' then
         local left_width = math.floor((max_width - 3) / 2)
         local right_width = max_width - 3 - left_width
-        return strcharpart(text, 0, left_width) .. '...' .. strcharpart(text, strchars(text) - right_width, right_width)
+        return prefix_within(text, left_width) .. '...' .. suffix_within(text, right_width)
     end
 
-    return strcharpart(text, 0, max_width - 3) .. '...'
+    return prefix_within(text, max_width - 3) .. '...'
 end
 
 return M

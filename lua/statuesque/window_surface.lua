@@ -9,7 +9,7 @@ local function assert_target(target)
 end
 
 ---@param winid integer
----@return table<string, { owner: string, bufnr: integer }>
+---@return table<string, { owner: string, bufnr: integer, expression: string, previous: any }>
 local function replacement_state(winid)
     local state = vim.w[winid][STATE_VAR]
 
@@ -23,16 +23,18 @@ end
 
 ---@param winid integer
 ---@param target string
-local function reset_window_target(winid, target)
+---@param replacement table
+local function reset_window_target(winid, target, replacement)
     assert_target(target)
 
     if not vim.api.nvim_win_is_valid(winid) then
         return
     end
 
-    pcall(vim.api.nvim_win_call, winid, function()
-        vim.cmd(('setlocal %s<'):format(target))
-    end)
+    local current = vim.api.nvim_get_option_value(target, { win = winid, scope = 'local' })
+    if replacement.expression == nil or current == replacement.expression then
+        vim.api.nvim_set_option_value(target, replacement.previous, { win = winid, scope = 'local' })
+    end
 end
 
 ---@param winid integer
@@ -48,11 +50,14 @@ local function clear_replacement(winid, target)
         return
     end
 
+    local replacement = state[target]
     state[target] = nil
-    reset_window_target(winid, target)
+    reset_window_target(winid, target, replacement)
 
     if next(state) == nil then
         vim.w[winid][STATE_VAR] = nil
+    else
+        vim.w[winid][STATE_VAR] = state
     end
 end
 
@@ -163,13 +168,21 @@ function M.replace(opts)
 
     for _, winid in ipairs(replacement_windows(opts)) do
         if vim.api.nvim_win_is_valid(winid) and vim.api.nvim_win_get_buf(winid) == opts.bufnr then
+            local state = replacement_state(winid)
+            local existing = state[opts.target]
+            local previous = existing and existing.previous
+                or vim.api.nvim_get_option_value(opts.target, { win = winid, scope = 'local' })
             vim.api.nvim_set_option_value(opts.target, opts.expression, {
                 win = winid,
+                scope = 'local',
             })
-            replacement_state(winid)[opts.target] = {
+            state[opts.target] = {
                 owner = opts.owner,
                 bufnr = opts.bufnr,
+                expression = opts.expression,
+                previous = previous,
             }
+            vim.w[winid][STATE_VAR] = state
             updated[#updated + 1] = winid
         end
     end

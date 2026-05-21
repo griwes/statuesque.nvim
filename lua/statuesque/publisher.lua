@@ -50,20 +50,50 @@ end
 --- @return nil
 function M.ensure_subscription(component, key, opts)
     local subscribe = component.statuesque_subscribe or component.subscribe
-    if type(subscribe) ~= 'function' or M._subscriptions[component] ~= nil then
+    if type(subscribe) ~= 'function' then
         return
     end
 
-    local function notify()
-        cache.invalidate(key)
-        if opts and type(opts.on_update) == 'function' then
-            opts.on_update(component)
-            return
+    local record = M._subscriptions[component]
+    if record == nil then
+        record = {
+            keys = {},
+            callbacks = {},
+            redraw = false,
+        }
+        M._subscriptions[component] = record
+
+        local record_ref = setmetatable({ record }, { __mode = 'v' })
+        local component_ref = setmetatable({ component }, { __mode = 'v' })
+
+        local function notify()
+            local live_record = record_ref[1]
+            local live_component = component_ref[1]
+            if live_record == nil or live_component == nil then
+                return
+            end
+            for cache_key in pairs(live_record.keys) do
+                cache.invalidate(cache_key)
+            end
+            for callback in pairs(live_record.callbacks) do
+                callback(live_component)
+            end
+            if live_record.redraw then
+                schedule_redraw()
+            end
         end
-        schedule_redraw()
+
+        record.subscription = subscribe(component, notify) or true
     end
 
-    M._subscriptions[component] = subscribe(component, notify) or true
+    if key ~= nil then
+        record.keys[key] = true
+    end
+    if opts and type(opts.on_update) == 'function' then
+        record.callbacks[opts.on_update] = true
+    else
+        record.redraw = true
+    end
 end
 
 --- Create a self-publishing component.

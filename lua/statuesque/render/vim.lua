@@ -97,7 +97,7 @@ local function render_node_uncached(node, ctx)
         local click_id, function_name = clicks.register(node.on_click, {
             node = node,
             target = ctx.target,
-        })
+        }, ctx)
         rendered = ('%%%d@%s@%s%%T'):format(click_id, function_name, rendered)
     end
 
@@ -110,6 +110,7 @@ end
 function render_node(node, ctx)
     local hover_start_col = ctx._statuesque_hover_col or 0
     local hover_span_start = hovers.span_count(ctx)
+    local click_start = #(ctx._statuesque_click_ids or {})
     local inline_highlight_start = ctx.inline_highlight_index
     local inline_definition_start = #ctx.inline_highlight_definitions
     --- @type { rendered: string, inline_highlight_count?: integer, inline_highlight_definitions?: { name: string, hl: statuesque.HighlightSpec }[], hover_width?: integer, hover_spans?: table[] }
@@ -124,6 +125,7 @@ function render_node(node, ctx)
                 rendered = rendered,
                 inline_highlight_count = inline_highlight_count,
                 inline_highlight_definitions = highlights.capture(ctx, inline_definition_start),
+                click_records = clicks.capture(ctx, click_start),
                 hover_width = (ctx._statuesque_hover_col or hover_start_col) - hover_start_col,
                 hover_spans = hovers.capture_relative(ctx, hover_span_start, hover_start_col),
             }
@@ -134,7 +136,9 @@ function render_node(node, ctx)
         return tostring(record or '')
     end
 
+    local rendered = record.rendered
     if from_cache then
+        rendered = clicks.replay(ctx, record.click_records, rendered)
         hovers.replay_relative(ctx, record.hover_spans, hover_start_col)
         ctx._statuesque_hover_col = hover_start_col + (record.hover_width or hovers.display_width(record.rendered))
     end
@@ -148,7 +152,7 @@ function render_node(node, ctx)
 
     ctx.inline_highlight_index = inline_highlight_start + (record.inline_highlight_count or 0)
     highlights.apply(record)
-    return record.rendered
+    return rendered
 end
 
 --- Render a spec into Vim statusline/tabline/winbar syntax.
@@ -159,17 +163,27 @@ function M.render(render_spec, opts)
     local ctx =
         highlights.with_context(context.with_target(opts, opts and opts.target or 'vim'), opts, 'StatuesqueInline')
 
+    clicks.begin_render(ctx)
     hovers.begin_render(ctx)
 
-    local chunks = {}
-    for _, node in ipairs(spec.normalize(render_spec, ctx)) do
-        local rendered = render_node(node, ctx)
-        if rendered ~= '' then
-            chunks[#chunks + 1] = rendered
+    local ok, rendered = xpcall(function()
+        local chunks = {}
+        for _, node in ipairs(spec.normalize(render_spec, ctx)) do
+            local chunk = render_node(node, ctx)
+            if chunk ~= '' then
+                chunks[#chunks + 1] = chunk
+            end
         end
+        return table.concat(chunks)
+    end, debug.traceback)
+
+    if not ok then
+        clicks.abort_render(ctx)
+        hovers.abort_render(ctx)
+        error(rendered, 0)
     end
 
-    local rendered = table.concat(chunks)
+    clicks.finish_render(ctx)
     hovers.finish_render(ctx)
     return rendered
 end

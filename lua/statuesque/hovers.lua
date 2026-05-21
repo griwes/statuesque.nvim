@@ -5,12 +5,24 @@ local M = {
     _active = {},
     _installed_targets = {},
     _mousemove_installed = false,
+    _previous_mousemoveevent = nil,
+    _window_hooks_installed = false,
+    _mousemoveevent_hook_installed = false,
+    _mousemoveevent_owned = false,
+    _changing_mousemoveevent = false,
 }
+
+local MOUSEMOVE_NAMESPACE = vim.api.nvim_create_namespace('statuesque.mousemove')
+local MOUSEMOVE_KEY = vim.api.nvim_replace_termcodes('<MouseMove>', true, false, true)
+local retire_active
 
 --- @param surface string
 --- @param target string
 --- @return string
-local function surface_key(surface, target)
+local function surface_key(surface, target, winid)
+    if target == 'winbar' and winid ~= nil then
+        return ('%s:%s:%d'):format(target, surface, winid)
+    end
     return ('%s:%s'):format(target, surface)
 end
 
@@ -117,7 +129,13 @@ function M.replay_relative(ctx, relative_spans, start_col)
     end
 
     for _, span in ipairs(relative_spans) do
-        local id = M.register(span.handler, span.context)
+        local slot = #ctx._statuesque_hover_spans + 1
+        local previous = ctx._statuesque_hover_previous
+        local id = previous and previous.ids and previous.ids[slot] or nil
+        if id == nil then
+            id = M._next_id
+            M._next_id = M._next_id + 1
+        end
         ctx._statuesque_hover_spans[#ctx._statuesque_hover_spans + 1] = {
             id = id,
             handler = span.handler,
@@ -138,31 +156,41 @@ end
 --- @param end_col integer
 --- @return integer id
 function M.record_span(ctx, handler, context, start_col, end_col)
-    local id = M.register(handler, context)
-    if should_collect(ctx) and end_col > start_col then
-        ctx._statuesque_hover_spans[#ctx._statuesque_hover_spans + 1] = {
-            id = id,
-            handler = handler,
-            context = context or {},
-            surface = ctx.surface,
-            target = ctx.target,
-            start_col = start_col + 1,
-            end_col = end_col,
-        }
+    if not should_collect(ctx) or end_col <= start_col then
+        return 0
     end
+
+    local slot = #ctx._statuesque_hover_spans + 1
+    local previous = ctx._statuesque_hover_previous
+    local id = previous and previous.ids and previous.ids[slot] or nil
+    if id == nil then
+        id = M._next_id
+        M._next_id = M._next_id + 1
+    end
+    ctx._statuesque_hover_spans[#ctx._statuesque_hover_spans + 1] = {
+        id = id,
+        handler = handler,
+        context = context or {},
+        surface = ctx.surface,
+        target = ctx.target,
+        start_col = start_col + 1,
+        end_col = end_col,
+    }
     return id
 end
 
 --- Start collecting hover spans for a rendered installed surface.
 --- @param ctx statuesque.RenderContext
 function M.begin_render(ctx)
-    if type(ctx.surface) ~= 'string' or type(ctx.target) ~= 'string' then
+    if ctx._statuesque_installed_render ~= true or type(ctx.surface) ~= 'string' or type(ctx.target) ~= 'string' then
         return
     end
 
     ctx._statuesque_hover_collect = true
     ctx._statuesque_hover_col = 0
     ctx._statuesque_hover_spans = {}
+    ctx._statuesque_hover_key = surface_key(ctx.surface, ctx.target, ctx.winid)
+    ctx._statuesque_hover_previous = M._surfaces[ctx._statuesque_hover_key]
 end
 
 --- Store hover spans produced by a rendered installed surface.
@@ -172,11 +200,53 @@ function M.finish_render(ctx)
         return
     end
 
-    M._surfaces[surface_key(ctx.surface, ctx.target)] = {
+    local key = ctx._statuesque_hover_key
+    local previous = ctx._statuesque_hover_previous
+    local next_spans = ctx._statuesque_hover_spans or {}
+    local active = M._active[key]
+    local retained_active
+    if active ~= nil then
+        for _, span in ipairs(next_spans) do
+            if span.id == active.id and span.start_col == active.start_col and span.end_col == active.end_col then
+                retained_active = span
+                break
+            end
+        end
+        if retained_active == nil then
+            retire_active(key, {
+                reason = 'render',
+            })
+        end
+    end
+
+    local ids = vim.deepcopy(previous and previous.ids or {})
+    for index, span in ipairs(next_spans) do
+        ids[index] = span.id
+        M._handlers[span.id] = {
+            handler = span.handler,
+            context = span.context,
+        }
+    end
+    M._surfaces[key] = {
         surface = ctx.surface,
         target = ctx.target,
-        spans = ctx._statuesque_hover_spans or {},
+        winid = ctx.winid,
+        ids = ids,
+        spans = next_spans,
     }
+    if retained_active ~= nil then
+        M._active[key] = retained_active
+    end
+    M.refresh_mousemove_mapping()
+end
+
+--- Discard a partial render without publishing provisional handlers.
+--- @param ctx statuesque.RenderContext
+function M.abort_render(ctx)
+    if not should_collect(ctx) then
+        return
+    end
+    ctx._statuesque_hover_spans = {}
 end
 
 --- @param handler string
@@ -227,12 +297,29 @@ function M.dispatch(id, phase, context)
     return payload
 end
 
+retire_active = function(key, context)
+    local span = M._active[key]
+    if span == nil then
+        return
+    end
+    pcall(
+        M.dispatch,
+        span.id,
+        'leave',
+        vim.tbl_extend('force', context or {}, {
+            surface = span.surface,
+            target = span.target,
+        })
+    )
+    M._active[key] = nil
+end
+
 --- @param surface string
 --- @param target string
 --- @param column integer
 --- @return table?
-local function span_at(surface, target, column)
-    local surface_record = M._surfaces[surface_key(surface, target)]
+local function span_at(surface, target, column, winid)
+    local surface_record = M._surfaces[surface_key(surface, target, winid)]
     if surface_record == nil then
         return nil
     end
@@ -251,12 +338,7 @@ end
 local function leave_active(context, keep_key)
     for key, span in pairs(M._active) do
         if key ~= keep_key then
-            local payload = vim.tbl_extend('force', context or {}, {
-                surface = span.surface,
-                target = span.target,
-            })
-            M.dispatch(span.id, 'leave', payload)
-            M._active[key] = nil
+            retire_active(key, context)
         end
     end
 end
@@ -269,8 +351,9 @@ end
 --- @param context? table
 --- @return any
 function M.dispatch_position(surface, target, column, row, context)
-    local key = surface_key(surface, target)
-    local next_span = span_at(surface, target, column)
+    local winid = context and tonumber(context.winid or (context.mouse and context.mouse.winid)) or nil
+    local key = surface_key(surface, target, winid)
+    local next_span = span_at(surface, target, column, winid)
     local previous = M._active[key]
     local payload = vim.tbl_extend('force', context or {}, {
         surface = surface,
@@ -356,29 +439,141 @@ function M.handle_mousemove(pos)
     })
 end
 
+local function mousemove_on_key(key)
+    if key == MOUSEMOVE_KEY then
+        pcall(M.handle_mousemove)
+    end
+end
+
+local function has_hover_spans()
+    for _, record in pairs(M._surfaces) do
+        if M._installed_targets[record.target] == record.surface and #(record.spans or {}) > 0 then
+            return true
+        end
+    end
+    return false
+end
+
+local function ensure_mousemoveevent_hook()
+    if M._mousemoveevent_hook_installed then
+        return
+    end
+    M._mousemoveevent_hook_installed = true
+    local group = vim.api.nvim_create_augroup('StatuesqueHoverMouseOption', { clear = true })
+    vim.api.nvim_create_autocmd('OptionSet', {
+        group = group,
+        pattern = 'mousemoveevent',
+        callback = function()
+            if M._mousemove_installed and not M._changing_mousemoveevent then
+                M._mousemoveevent_owned = false
+            end
+        end,
+    })
+end
+
+local function set_mousemoveevent(value)
+    M._changing_mousemoveevent = true
+    vim.o.mousemoveevent = value
+    M._changing_mousemoveevent = false
+end
+
 local function install_mousemove_mapping()
     if M._mousemove_installed then
         return
     end
     M._mousemove_installed = true
+    M._previous_mousemoveevent = vim.o.mousemoveevent
+    M._mousemoveevent_owned = true
 
-    vim.o.mousemoveevent = true
-    vim.keymap.set({ 'n', 'i', 'v', 'x', 's', 'o', 'c' }, '<MouseMove>', function()
-        M.handle_mousemove()
-        return '<Ignore>'
-    end, {
-        expr = true,
-        silent = true,
-        desc = 'Dispatch Statuesque hover handlers',
+    ensure_mousemoveevent_hook()
+    set_mousemoveevent(true)
+    vim.on_key(mousemove_on_key, MOUSEMOVE_NAMESPACE)
+end
+
+local function uninstall_mousemove_mapping()
+    if not M._mousemove_installed then
+        return
+    end
+    vim.on_key(nil, MOUSEMOVE_NAMESPACE)
+    if M._mousemoveevent_owned and vim.o.mousemoveevent == true then
+        set_mousemoveevent(M._previous_mousemoveevent == true)
+    end
+    M._previous_mousemoveevent = nil
+    M._mousemoveevent_owned = false
+    M._mousemove_installed = false
+end
+
+local function ensure_window_hooks()
+    if M._window_hooks_installed then
+        return
+    end
+
+    M._window_hooks_installed = true
+    local group = vim.api.nvim_create_augroup('StatuesqueHoverWindows', { clear = true })
+    vim.api.nvim_create_autocmd('WinClosed', {
+        group = group,
+        callback = function(args)
+            local winid = tonumber(args.match)
+            if winid ~= nil then
+                M.uninstall_window(winid)
+                require('statuesque.clicks').uninstall_window(winid)
+            end
+        end,
     })
+end
+
+function M.refresh_mousemove_mapping()
+    if has_hover_spans() then
+        install_mousemove_mapping()
+    else
+        uninstall_mousemove_mapping()
+    end
 end
 
 --- Register an installed statusline-family surface for mousemove hit testing.
 --- @param surface string
 --- @param target 'statusline'|'tabline'|'winbar'
 function M.install_surface(surface, target)
+    ensure_window_hooks()
     M._installed_targets[target] = surface
-    install_mousemove_mapping()
+    M.refresh_mousemove_mapping()
+end
+
+--- Remove hover state owned by a closed winbar window.
+--- @param winid integer
+function M.uninstall_window(winid)
+    for key, record in pairs(M._surfaces) do
+        if record.target == 'winbar' and record.winid == winid then
+            retire_active(key, {
+                reason = 'window',
+                winid = winid,
+            })
+            for _, id in ipairs(record.ids or {}) do
+                M._handlers[id] = nil
+            end
+            M._surfaces[key] = nil
+        end
+    end
+    M.refresh_mousemove_mapping()
+end
+
+--- Remove an installed target and any hover state it owns.
+--- @param target string
+function M.uninstall_surface(target)
+    M._installed_targets[target] = nil
+    local prefix = target .. ':'
+    for key, record in pairs(M._surfaces) do
+        if key:sub(1, #prefix) == prefix then
+            retire_active(key, {
+                reason = 'uninstall',
+            })
+            for _, id in ipairs(record.ids or {}) do
+                M._handlers[id] = nil
+            end
+            M._surfaces[key] = nil
+        end
+    end
+    M.refresh_mousemove_mapping()
 end
 
 return M

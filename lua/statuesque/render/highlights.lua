@@ -1,9 +1,49 @@
 local M = {}
 
+local ALLOWED_HIGHLIGHT_KEYS = {
+    bg = true,
+    background = true,
+    blend = true,
+    bold = true,
+    cterm = true,
+    ctermbg = true,
+    ctermfg = true,
+    default = true,
+    fg = true,
+    foreground = true,
+    italic = true,
+    link = true,
+    nocombine = true,
+    reverse = true,
+    sp = true,
+    special = true,
+    standout = true,
+    strikethrough = true,
+    undercurl = true,
+    underdashed = true,
+    underdotted = true,
+    underdouble = true,
+    underline = true,
+}
+
 --- @param ctx statuesque.RenderContext
 --- @return integer
 local function namespace(ctx)
     return tonumber(ctx.inline_highlight_namespace) or 0
+end
+
+--- @param hl statuesque.HighlightSpec
+--- @return statuesque.HighlightSpec
+local function sanitize(hl)
+    local clean = {}
+
+    for key, value in pairs(hl) do
+        if ALLOWED_HIGHLIGHT_KEYS[key] then
+            clean[key] = value
+        end
+    end
+
+    return clean
 end
 
 --- @param ctx statuesque.RenderContext
@@ -51,8 +91,9 @@ function M.name(hl, ctx)
 
     ctx.inline_highlight_index = ctx.inline_highlight_index + 1
     local name = ('%s%d'):format(ctx.inline_highlight_prefix, ctx.inline_highlight_index)
-    vim.api.nvim_set_hl(namespace(ctx), name, hl)
-    record(ctx, name, hl)
+    local clean = sanitize(hl)
+    vim.api.nvim_set_hl(namespace(ctx), name, clean)
+    record(ctx, name, clean)
     return name
 end
 
@@ -76,7 +117,7 @@ function M.apply(record)
     end
 
     for _, definition in ipairs(record.inline_highlight_definitions) do
-        vim.api.nvim_set_hl(tonumber(definition.namespace) or 0, definition.name, definition.hl)
+        vim.api.nvim_set_hl(tonumber(definition.namespace) or 0, definition.name, sanitize(definition.hl))
     end
 end
 

@@ -1,8 +1,20 @@
 local M = {}
 local incline_renderer = require('statuesque.render.incline')
 local HIGHLIGHT_NAMESPACE = incline_renderer.highlight_namespace()
-local refresh_wrapped = false
+local wrapper_states = setmetatable({}, { __mode = 'k' })
+local active_incline
+local active_wrapper
 local apply_highlight_namespace
+M._installed = false
+
+local unpack_values = table.unpack or unpack
+
+local function pack_values(...)
+    return {
+        n = select('#', ...),
+        ...,
+    }
+end
 
 --- @param value any
 --- @return table
@@ -49,16 +61,76 @@ end
 
 --- @param incline table
 local function wrap_refresh(incline)
-    if refresh_wrapped or type(incline.refresh) ~= 'function' then
+    local states = wrapper_states[incline]
+    if states ~= nil then
+        for _, state in ipairs(states) do
+            if incline.refresh == state.wrapper then
+                state.enabled = true
+                return state
+            end
+        end
+    end
+    if type(incline.refresh) ~= 'function' then
+        return nil
+    end
+
+    local state = {
+        original = incline.refresh,
+        enabled = true,
+    }
+    state.wrapper = function(...)
+        local results = pack_values(state.original(...))
+        if state.enabled then
+            schedule_highlight_namespace_apply()
+        end
+        return unpack_values(results, 1, results.n)
+    end
+    states = states or {}
+    states[#states + 1] = state
+    wrapper_states[incline] = states
+    incline.refresh = state.wrapper
+    return state
+end
+
+local function remove_wrapper_state(incline, state)
+    local states = wrapper_states[incline]
+    if states == nil then
         return
     end
-    local original_refresh = incline.refresh
-    incline.refresh = function(...)
-        local results = { original_refresh(...) }
-        schedule_highlight_namespace_apply()
-        return unpack(results)
+    for index = #states, 1, -1 do
+        if states[index] == state then
+            table.remove(states, index)
+            break
+        end
     end
-    refresh_wrapped = true
+    if #states == 0 then
+        wrapper_states[incline] = nil
+    end
+end
+
+local function unwrap_if_exposed(incline, state)
+    if incline.refresh ~= state.wrapper then
+        return false
+    end
+    incline.refresh = state.original
+    remove_wrapper_state(incline, state)
+    return true
+end
+
+local function unwrap_exposed_wrappers()
+    for incline, states in pairs(wrapper_states) do
+        local changed = true
+        while changed do
+            changed = false
+            for _, state in ipairs(states) do
+                if unwrap_if_exposed(incline, state) then
+                    changed = true
+                    break
+                end
+            end
+            states = wrapper_states[incline] or {}
+        end
+    end
 end
 
 --- Install the configured Statuesque incline surface through incline.nvim.
@@ -76,7 +148,8 @@ function M.setup(opts, surface)
         return false
     end
 
-    wrap_refresh(incline)
+    active_wrapper = wrap_refresh(incline)
+    active_incline = incline
 
     surface = surface or opts.surface or 'window_label'
     local incline_opts = vim.tbl_deep_extend('force', table_or_empty(opts.opts), {
@@ -94,10 +167,31 @@ function M.setup(opts, surface)
     })
 
     incline.setup(incline_opts)
+    if type(incline.enable) == 'function' then
+        pcall(incline.enable)
+    end
     install_highlight_namespace_hooks()
     schedule_highlight_namespace_apply()
     pcall(incline.refresh)
+    M._installed = true
     return true
+end
+
+--- Disable an Incline instance installed by Statuesque.
+function M.disable()
+    local incline = active_incline
+    if M._installed and incline ~= nil and type(incline.disable) == 'function' then
+        pcall(incline.disable)
+    end
+    if active_wrapper ~= nil then
+        active_wrapper.enabled = false
+        unwrap_if_exposed(incline, active_wrapper)
+    end
+    unwrap_exposed_wrappers()
+    active_incline = nil
+    active_wrapper = nil
+    pcall(vim.api.nvim_del_augroup_by_name, 'StatuesqueInclineHighlightNamespace')
+    M._installed = false
 end
 
 return M

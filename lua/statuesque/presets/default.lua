@@ -487,10 +487,10 @@ local function validate_backend_targets(configs)
     end
 end
 
---- Build the default preset surfaces without installing them.
+--- Validate and build a complete preset installation without side effects.
 --- @param config? statuesque.Config
---- @return table<string, statuesque.RenderNode>
-function M.surfaces(config)
+--- @return { configs: table<string, statuesque.SurfaceConfig|false>, surfaces: table<string, statuesque.RenderNode> }
+function M.prepare(config)
     config = config or {}
     local configs = surface_configs(config)
     validate_backend_targets(configs)
@@ -501,7 +501,17 @@ function M.surfaces(config)
             surfaces[surface] = compose_surface(surface, surface_config, config)
         end
     end
-    return surfaces
+    return {
+        configs = configs,
+        surfaces = surfaces,
+    }
+end
+
+--- Build the default preset surfaces without installing them.
+--- @param config? statuesque.Config
+--- @return table<string, statuesque.RenderNode>
+function M.surfaces(config)
+    return M.prepare(config).surfaces
 end
 
 --- @param surface string
@@ -527,22 +537,18 @@ end
 
 --- Install the default preset surfaces.
 --- @param config? statuesque.Config
+--- @param prepared? { configs: table<string, statuesque.SurfaceConfig|false>, surfaces: table<string, statuesque.RenderNode> }
 --- @return table<string, statuesque.RenderNode>
-function M.install(config)
+function M.install(config, prepared)
     config = config or {}
     local statuesque = require('statuesque')
-    local configs = surface_configs(config)
-    validate_backend_targets(configs)
+    prepared = prepared or M.prepare(config)
 
-    local surfaces = {}
-    for surface, surface_config in pairs(configs) do
-        if surface_config ~= false then
-            surfaces[surface] = compose_surface(surface, surface_config, config)
-            statuesque.set_surface(surface, surfaces[surface])
-        end
+    for surface, render_spec in pairs(prepared.surfaces) do
+        statuesque.set_surface(surface, render_spec)
     end
 
-    for surface, surface_config in pairs(configs) do
+    for surface, surface_config in pairs(prepared.configs) do
         if surface_config ~= false then
             for _, backend in ipairs(backend_configs(surface, surface_config)) do
                 install_backend(surface, surface_config, backend)
@@ -550,7 +556,7 @@ function M.install(config)
         end
     end
 
-    return surfaces
+    return prepared.surfaces
 end
 
 return M

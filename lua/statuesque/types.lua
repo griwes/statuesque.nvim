@@ -66,6 +66,7 @@
 --- @field inline_highlight_index? integer
 --- @field inline_highlight_definitions? { name: string, hl: statuesque.HighlightSpec }[]
 --- @field render_scope? statuesque.RenderScope
+--- @field _statuesque_installed_render? boolean Internal marker for Neovim-owned surface evaluations.
 --- @field cache_scope? statuesque.RenderScope
 --- @field winid? integer
 --- @field win_id? integer
@@ -289,7 +290,6 @@
 
 --- @class statuesque.WidgetModeOptions
 --- @field icon? string
---- @field cache_key? any
 
 --- @class statuesque.WidgetFilenameOptions
 --- @field path? string

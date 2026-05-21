@@ -22,6 +22,14 @@ local function count_occurrences(actual, needle)
     end
 end
 
+local function table_size(value)
+    local count = 0
+    for _ in pairs(value) do
+        count = count + 1
+    end
+    return count
+end
+
 local function strip_vim_statusline(actual)
     return tostring(actual):gsub('%%#[^#]-#', ''):gsub('%%%*', '')
 end
@@ -172,6 +180,13 @@ describe('statuesque render spec', function()
         assert_equal(statuesque.render({ text = 'abcdefgh', max_width = 5, truncate = 'left' }, 'text'), '...gh')
         assert_equal(statuesque.render({ text = 'abcdefgh', max_width = 5, truncate = 'middle' }, 'text'), 'a...h')
         assert_equal(statuesque.render({ text = 'abcdefgh', max_width = 5, truncate = 'hide' }, 'text'), '')
+    end)
+
+    it('applies max width in display cells', function()
+        assert_equal(statuesque.render({ text = '界界界', max_width = 5 }, 'text'), '界...')
+        assert_equal(statuesque.render({ text = '界界界', max_width = 5, truncate = 'left' }, 'text'), '...界')
+        assert_equal(statuesque.render({ text = '界界', max_width = 3 }, 'text'), '界')
+        assert(vim.fn.strdisplaywidth(statuesque.render({ text = 'a界bc界', max_width = 6 }, 'text')) <= 6)
     end)
 
     it('evaluates top-level and embedded function render specs with context', function()
@@ -505,6 +520,33 @@ describe('statuesque render spec', function()
         assert_equal(('#%06x'):format(hl.bg), '#445566')
     end)
 
+    it('keeps internal render metadata out of Vim inline highlight definitions', function()
+        local ok, rendered = pcall(
+            statuesque.render,
+            {
+                {
+                    text = 'safe',
+                    hl = {
+                        fg = '#112233',
+                        bg = '#445566',
+                        __statuesque_dynamic_index = 9,
+                    },
+                },
+            },
+            'statusline',
+            {
+                inline_highlight_prefix = 'StatuesqueMetadataFilter',
+            }
+        )
+
+        assert(ok, rendered)
+        assert_contains(rendered, 'StatuesqueMetadataFilter1')
+
+        local hl = vim.api.nvim_get_hl(0, { name = 'StatuesqueMetadataFilter1' })
+        assert_equal(('#%06x'):format(hl.fg), '#112233')
+        assert_equal(('#%06x'):format(hl.bg), '#445566')
+    end)
+
     it('renders publisher components and refreshes them through published updates', function()
         local notify
         local value = 'cold'
@@ -524,6 +566,127 @@ describe('statuesque render spec', function()
         assert_equal(statuesque.render({ publisher }, 'text'), 'cold')
         notify()
         assert_equal(statuesque.render({ publisher }, 'text'), 'hot')
+    end)
+
+    it('keeps no-cache publisher updates from invalidating unrelated caches', function()
+        local notify
+        local cached_calls = 0
+        local cached = {
+            cache = { key = 'publisher-unrelated-cache' },
+            render = function()
+                cached_calls = cached_calls + 1
+                return ('cached-%d'):format(cached_calls)
+            end,
+        }
+        local publisher = {
+            statuesque_component = true,
+            render = function()
+                return 'live'
+            end,
+            subscribe = function(_, callback)
+                notify = callback
+            end,
+        }
+
+        assert_equal(statuesque.render({ cached, publisher }, 'text'), 'cached-1live')
+        notify()
+        assert_equal(statuesque.render({ cached, publisher }, 'text'), 'cached-1live')
+    end)
+
+    it('invalidates every scoped cache owned by a shared publisher', function()
+        local notify
+        local values = {
+            [11] = 'first-old',
+            [22] = 'second-old',
+        }
+        local publisher = {
+            statuesque_component = true,
+            cache = {
+                key = 'publisher-window-cache',
+                cache_mode = 'window',
+            },
+            render = function(_, context)
+                return values[context.winid]
+            end,
+            subscribe = function(_, callback)
+                notify = callback
+            end,
+        }
+
+        assert_equal(statuesque.render({ publisher }, 'text', { winid = 11 }), 'first-old')
+        assert_equal(statuesque.render({ publisher }, 'text', { winid = 22 }), 'second-old')
+
+        values[11] = 'first-new'
+        values[22] = 'second-new'
+        notify()
+
+        assert_equal(statuesque.render({ publisher }, 'text', { winid = 11 }), 'first-new')
+        assert_equal(statuesque.render({ publisher }, 'text', { winid = 22 }), 'second-new')
+    end)
+
+    it('keeps live publisher callbacks strong without retaining dead publishers', function()
+        local publisher_module = require('statuesque.publisher')
+        local notify
+        local updates = 0
+        local component = {
+            statuesque_component = true,
+            render = function()
+                return 'live'
+            end,
+            subscribe = function(_, callback)
+                notify = callback
+            end,
+        }
+        local weak_component = setmetatable({ component }, { __mode = 'v' })
+
+        do
+            local context = {
+                on_update = function()
+                    updates = updates + 1
+                end,
+            }
+            assert_equal(statuesque.render({ component }, 'text', context), 'live')
+        end
+
+        collectgarbage('collect')
+        collectgarbage('collect')
+        notify()
+        assert_equal(updates, 1)
+        assert(publisher_module._subscriptions[component] ~= nil)
+
+        component = nil
+        collectgarbage('collect')
+        collectgarbage('collect')
+        assert_equal(weak_component[1], nil)
+        notify()
+        assert_equal(updates, 1)
+    end)
+
+    it('keeps the mode widget label reactive across redraws without keymaps', function()
+        local mode_widget = require('statuesque.widgets.mode')()
+        local original_mode_name = style.mode_name
+        local ok, err = pcall(function()
+            style.mode_name = function()
+                return 'replace'
+            end
+            assert_equal(statuesque.render({ mode_widget }, 'text'), 'REPLACE')
+
+            style.mode_name = function()
+                return 'normal'
+            end
+            assert_equal(statuesque.render({ mode_widget }, 'text'), 'NORMAL')
+
+            local back = vim.fn.maparg('<C-o>', 'n', false, true)
+            local forward = vim.fn.maparg('<C-i>', 'n', false, true)
+
+            assert(back.callback == nil, 'mode widget must not install <C-o>')
+            assert(forward.callback == nil, 'mode widget must not install <C-i>')
+        end)
+
+        style.mode_name = original_mode_name
+        if not ok then
+            error(err)
+        end
     end)
 
     it('resolves runtimepath widget references and optional missing widgets', function()
@@ -1509,20 +1672,139 @@ describe('statuesque render spec', function()
         assert(rendered:find('%T', 1, true), rendered)
     end)
 
-    it('registers Vim target hover handlers without emitting fake hover syntax', function()
+    it('keeps cached and uncached installed handlers live across bounded introspection', function()
+        local clicks = require('statuesque.clicks')
         local hovers = require('statuesque.hovers')
-        local before = hovers._next_id
-        local rendered = statuesque.render({
-            {
-                text = 'Alpha',
-                on_hover = { id = 'domain.hover', args = { domain = 1 } },
-            },
-        }, 'tabline')
+        local previous_tabline = vim.o.tabline
+        local previous_showtabline = vim.o.showtabline
 
-        assert_equal(rendered, 'Alpha')
-        assert_equal(hovers._next_id, before + 1)
-        assert_equal(statuesque.hover(before, 'enter').action, 'domain.hover')
-        assert_equal(statuesque.hover(before, 'enter').args.domain, 1)
+        local function run_case(name, cached)
+            local click_calls = 0
+            local hover_calls = 0
+            local function make_node()
+                return {
+                    text = 'Action',
+                    on_click = function()
+                        click_calls = click_calls + 1
+                    end,
+                    on_hover = function()
+                        hover_calls = hover_calls + 1
+                    end,
+                }
+            end
+            local render_spec = function()
+                return make_node()
+            end
+            if cached then
+                render_spec = {
+                    cache = { key = name },
+                    render = function()
+                        return make_node()
+                    end,
+                }
+            end
+
+            statuesque.set_surface(name, { render_spec })
+            hovers.install_surface(name, 'tabline')
+            vim.o.showtabline = 2
+            vim.o.tabline = statuesque.surface_expression(name, 'tabline')
+
+            local installed = statuesque.render_installed_surface(name, 'tabline')
+            local installed_click_id = tonumber(installed:match('%%(%d+)@'))
+            local installed_hover_id = hovers._surfaces['tabline:' .. name].spans[1].id
+            local handlers_after_install = table_size(clicks._handlers)
+            hovers.dispatch_position(name, 'tabline', 1, 1)
+
+            for _ = 1, 12 do
+                statuesque.render_surface(name, 'tabline')
+                vim.api.nvim_eval_statusline(vim.o.tabline, { use_tabline = true })
+            end
+
+            assert(clicks._handlers[installed_click_id] ~= nil)
+            assert(hovers._handlers[installed_hover_id] ~= nil)
+            assert(hovers._active['tabline:' .. name] ~= nil)
+            assert(table_size(clicks._handlers) <= handlers_after_install + 1)
+            statuesque.click(installed_click_id, 'l', '')
+            hovers.dispatch_position(name, 'tabline', 1, 1)
+            assert_equal(click_calls, 1)
+            assert_equal(hover_calls, 2)
+
+            hovers.uninstall_surface('tabline')
+            clicks.uninstall_target('tabline')
+        end
+
+        run_case('regression-uncached-installed-handlers', false)
+        run_case('regression-cached-installed-handlers', true)
+
+        vim.o.tabline = previous_tabline
+        vim.o.showtabline = previous_showtabline
+    end)
+
+    it('regression: bounds direct click handlers and skips unusable hover handlers', function()
+        local clicks = require('statuesque.clicks')
+        local hovers = require('statuesque.hovers')
+        clicks.uninstall_target('tabline')
+        hovers.uninstall_surface('tabline')
+        local before_clicks = table_size(clicks._handlers)
+        local before_hovers = table_size(hovers._handlers)
+        local before_hover_id = hovers._next_id
+
+        for _ = 1, 6 do
+            statuesque.render({ text = 'Action', on_click = function() end }, 'tabline')
+        end
+
+        assert_equal(table_size(clicks._handlers), before_clicks + 1)
+        for _ = 1, 6 do
+            statuesque.render({ text = 'Hover', on_hover = function() end }, 'tabline')
+        end
+
+        assert_equal(table_size(clicks._handlers), before_clicks + 1)
+        assert_equal(table_size(hovers._handlers), before_hovers)
+        assert_equal(hovers._next_id, before_hover_id)
+
+        statuesque.set_surface('regression-zero-width-hover', {
+            { text = '', on_hover = function() end },
+        })
+        hovers.install_surface('regression-zero-width-hover', 'tabline')
+        for _ = 1, 6 do
+            assert_equal(statuesque.render_installed_surface('regression-zero-width-hover', 'tabline'), '')
+        end
+
+        assert_equal(table_size(hovers._handlers), before_hovers)
+        assert_equal(hovers._next_id, before_hover_id)
+        hovers.uninstall_surface('tabline')
+        clicks.uninstall_target('tabline')
+    end)
+
+    it('aborts partial handler generations after repeated render failures', function()
+        local clicks = require('statuesque.clicks')
+        local hovers = require('statuesque.hovers')
+        local before_clicks = table_size(clicks._handlers)
+        local before_hovers = table_size(hovers._handlers)
+
+        statuesque.set_surface('failed-handler-generation', {
+            {
+                text = 'Registered first',
+                on_click = function() end,
+                on_hover = function() end,
+            },
+            {
+                text = 'Fails second',
+                hl = { fg = 'definitely-not-a-color' },
+            },
+        })
+        hovers.install_surface('failed-handler-generation', 'tabline')
+
+        for _ = 1, 8 do
+            local ok = pcall(statuesque.render_installed_surface, 'failed-handler-generation', 'tabline')
+            assert_equal(ok, false)
+        end
+
+        assert_equal(table_size(clicks._handlers), before_clicks)
+        assert_equal(table_size(hovers._handlers), before_hovers)
+        assert_equal(hovers._surfaces['tabline:failed-handler-generation'], nil)
+        hovers.uninstall_surface('tabline')
+        clicks.uninstall_target('tabline')
     end)
 
     it('does not escape already rendered child Vim statusline syntax', function()
@@ -1716,6 +1998,255 @@ describe('statuesque render spec', function()
         assert_equal(seen[1].node.text, 'Hot')
     end)
 
+    it('replaces installed-surface click and hover handler generations', function()
+        local clicks = require('statuesque.clicks')
+        local hovers = require('statuesque.hovers')
+        local before_clicks = table_size(clicks._handlers)
+        local before_hovers = table_size(hovers._handlers)
+
+        statuesque.set_surface('bounded-tabline-handlers', function()
+            return {
+                {
+                    text = 'Action',
+                    on_click = function() end,
+                    on_hover = function() end,
+                },
+            }
+        end)
+        hovers.install_surface('bounded-tabline-handlers', 'tabline')
+
+        statuesque.render_installed_surface('bounded-tabline-handlers', 'tabline')
+        local first_clicks = table_size(clicks._handlers)
+        local first_hovers = table_size(hovers._handlers)
+        statuesque.render_installed_surface('bounded-tabline-handlers', 'tabline')
+
+        assert_equal(first_clicks, before_clicks + 1)
+        assert_equal(first_hovers, before_hovers + 1)
+        assert_equal(table_size(clicks._handlers), first_clicks)
+        assert_equal(table_size(hovers._handlers), first_hovers)
+
+        hovers.uninstall_surface('tabline')
+        clicks.uninstall_target('tabline')
+    end)
+
+    it('emits hover leave when active generations retire or uninstall', function()
+        local hovers = require('statuesque.hovers')
+        local phases = {}
+        local hover_node = {
+            text = 'Hover',
+            on_hover = function(payload)
+                phases[#phases + 1] = payload.phase
+            end,
+        }
+
+        statuesque.set_surface('active-hover-teardown', { hover_node })
+        hovers.install_surface('active-hover-teardown', 'tabline')
+        statuesque.render_installed_surface('active-hover-teardown', 'tabline')
+        hovers.dispatch_position('active-hover-teardown', 'tabline', 1, 1)
+
+        statuesque.set_surface('active-hover-teardown', { text = 'Plain' })
+        statuesque.render_installed_surface('active-hover-teardown', 'tabline')
+        assert_equal(table.concat(phases, ','), 'enter,leave')
+        assert_equal(next(hovers._active), nil)
+        assert_equal(hovers._mousemove_installed, false)
+
+        statuesque.set_surface('active-hover-teardown', { hover_node })
+        statuesque.render_installed_surface('active-hover-teardown', 'tabline')
+        hovers.dispatch_position('active-hover-teardown', 'tabline', 1, 1)
+        hovers.uninstall_surface('tabline')
+        assert_equal(table.concat(phases, ','), 'enter,leave,enter,leave')
+        assert_equal(next(hovers._active), nil)
+    end)
+
+    it('keeps installed winbar hover state separate per window', function()
+        local hovers = require('statuesque.hovers')
+        local seen = {}
+        statuesque.set_surface('window-hover', function(context)
+            return {
+                {
+                    text = tostring(context.winid),
+                    on_hover = function(payload)
+                        seen[#seen + 1] = {
+                            phase = payload.phase,
+                            text = payload.node.text,
+                        }
+                    end,
+                },
+            }
+        end)
+        hovers.install_surface('window-hover', 'winbar')
+
+        statuesque.render_surface('window-hover', 'winbar', {
+            winid = 101,
+            bufnr = 201,
+            _statuesque_installed_render = true,
+        })
+        statuesque.render_surface('window-hover', 'winbar', {
+            winid = 102,
+            bufnr = 202,
+            _statuesque_installed_render = true,
+        })
+        hovers.dispatch_position('window-hover', 'winbar', 1, 1, { winid = 101 })
+        hovers.dispatch_position('window-hover', 'winbar', 1, 1, { winid = 102 })
+
+        assert_equal(seen[1].phase, 'enter')
+        assert_equal(seen[1].text, '101')
+        assert_equal(seen[2].phase, 'leave')
+        assert_equal(seen[2].text, '101')
+        assert_equal(seen[3].phase, 'enter')
+        assert_equal(seen[3].text, '102')
+        hovers.uninstall_surface('winbar')
+    end)
+
+    it('regression: retires click and hover generations when a winbar window closes', function()
+        local clicks = require('statuesque.clicks')
+        local hovers = require('statuesque.hovers')
+        hovers.uninstall_surface('winbar')
+        clicks.uninstall_target('winbar')
+        local before_clicks = table_size(clicks._handlers)
+        local before_hovers = table_size(hovers._handlers)
+
+        vim.cmd('split')
+        local winid = vim.api.nvim_get_current_win()
+        local bufnr = vim.api.nvim_get_current_buf()
+        local phases = {}
+        statuesque.set_surface('regression-closed-winbar', {
+            {
+                text = 'Window',
+                on_click = function() end,
+                on_hover = function(payload)
+                    phases[#phases + 1] = payload.phase
+                end,
+            },
+        })
+        hovers.install_surface('regression-closed-winbar', 'winbar')
+        statuesque.render_surface('regression-closed-winbar', 'winbar', {
+            winid = winid,
+            bufnr = bufnr,
+            _statuesque_installed_render = true,
+        })
+
+        assert_equal(table_size(clicks._handlers), before_clicks + 1)
+        assert_equal(table_size(hovers._handlers), before_hovers + 1)
+        hovers.dispatch_position('regression-closed-winbar', 'winbar', 1, 1, { winid = winid })
+        vim.api.nvim_win_close(winid, true)
+
+        assert_equal(table_size(clicks._handlers), before_clicks)
+        assert_equal(table_size(hovers._handlers), before_hovers)
+        for _, record in pairs(clicks._surfaces) do
+            assert(record.winid ~= winid)
+        end
+        for _, record in pairs(hovers._surfaces) do
+            assert(record.winid ~= winid)
+        end
+        assert_equal(table.concat(phases, ','), 'enter,leave')
+
+        hovers.uninstall_surface('winbar')
+        clicks.uninstall_target('winbar')
+    end)
+
+    it('restores mousemove state when installed surfaces stop rendering hovers', function()
+        local hovers = require('statuesque.hovers')
+        local previous_mousemoveevent = vim.o.mousemoveevent
+        vim.o.mousemoveevent = false
+        vim.keymap.set('n', '<MouseMove>', '<Ignore>', { desc = 'Previous mousemove mapping' })
+
+        statuesque.set_surface('temporary-hover', {
+            { text = 'Hover', on_hover = function() end },
+        })
+        hovers.install_surface('temporary-hover', 'tabline')
+        statuesque.render_installed_surface('temporary-hover', 'tabline')
+        assert_equal(vim.o.mousemoveevent, true)
+
+        statuesque.set_surface('temporary-hover', { text = 'Plain' })
+        statuesque.render_installed_surface('temporary-hover', 'tabline')
+        local mapping = vim.fn.maparg('<MouseMove>', 'n', false, true)
+        assert_equal(vim.o.mousemoveevent, false)
+        assert_equal(mapping.desc, 'Previous mousemove mapping')
+
+        vim.keymap.del('n', '<MouseMove>')
+        vim.o.mousemoveevent = previous_mousemoveevent
+        hovers.uninstall_surface('tabline')
+    end)
+
+    it('regression: restores exact mouse mappings without overwriting later user state', function()
+        local hovers = require('statuesque.hovers')
+        hovers.uninstall_surface('statusline')
+        hovers.uninstall_surface('tabline')
+        hovers.uninstall_surface('winbar')
+        pcall(vim.keymap.del, 'n', '<MouseMove>')
+        local previous_mousemoveevent = vim.o.mousemoveevent
+        vim.o.mousemoveevent = false
+
+        statuesque.set_surface('regression-mousemove', {
+            { text = 'Hover', on_hover = function() end },
+        })
+        hovers.install_surface('regression-mousemove', 'tabline')
+
+        vim.api.nvim_exec2(
+            [[
+function! s:StatuesqueMouseMoveProbe()
+    return ''
+endfunction
+nnoremap <script> <MouseMove> :call <SID>StatuesqueMouseMoveProbe()<CR>
+]],
+            { output = false }
+        )
+        local original_script_mapping = vim.fn.maparg('<MouseMove>', 'n', false, true)
+        statuesque.render_installed_surface('regression-mousemove', 'tabline')
+        statuesque.set_surface('regression-mousemove', { text = 'Plain' })
+        statuesque.render_installed_surface('regression-mousemove', 'tabline')
+        local restored_script_mapping = vim.fn.maparg('<MouseMove>', 'n', false, true)
+        assert(
+            vim.deep_equal(restored_script_mapping, original_script_mapping),
+            ('expected exact mapping restoration:\nbefore=%s\nafter=%s'):format(
+                vim.inspect(original_script_mapping),
+                vim.inspect(restored_script_mapping)
+            )
+        )
+
+        vim.cmd('nunmap <MouseMove>')
+        vim.cmd('nnoremap <MouseMove> <Nop>')
+        statuesque.set_surface('regression-mousemove', {
+            { text = 'Hover', on_hover = function() end },
+        })
+        statuesque.render_installed_surface('regression-mousemove', 'tabline')
+        statuesque.set_surface('regression-mousemove', { text = 'Plain' })
+        statuesque.render_installed_surface('regression-mousemove', 'tabline')
+        local nop_mapping = vim.fn.maparg('<MouseMove>', 'n', false, true)
+        assert_equal(nop_mapping.lhs, '<MouseMove>')
+        assert_equal(nop_mapping.noremap, 1)
+
+        vim.cmd('nunmap <MouseMove>')
+        vim.keymap.set('n', '<MouseMove>', '<Ignore>', { desc = 'Before Statuesque' })
+        statuesque.set_surface('regression-mousemove', {
+            { text = 'Hover', on_hover = function() end },
+        })
+        statuesque.render_installed_surface('regression-mousemove', 'tabline')
+        vim.keymap.set('n', '<MouseMove>', '<Nop>', { desc = 'After Statuesque' })
+        vim.o.mousemoveevent = false
+        statuesque.set_surface('regression-mousemove', { text = 'Plain' })
+        statuesque.render_installed_surface('regression-mousemove', 'tabline')
+        local user_mapping = vim.fn.maparg('<MouseMove>', 'n', false, true)
+        assert_equal(user_mapping.desc, 'After Statuesque')
+        assert_equal(vim.o.mousemoveevent, false)
+
+        vim.keymap.del('n', '<MouseMove>')
+        vim.o.mousemoveevent = false
+        statuesque.set_surface('regression-mousemove', {
+            { text = 'Hover', on_hover = function() end },
+        })
+        statuesque.render_installed_surface('regression-mousemove', 'tabline')
+        vim.o.mousemoveevent = true
+        statuesque.set_surface('regression-mousemove', { text = 'Plain' })
+        statuesque.render_installed_surface('regression-mousemove', 'tabline')
+        assert_equal(vim.o.mousemoveevent, true)
+
+        pcall(vim.keymap.del, 'n', '<MouseMove>')
+        vim.o.mousemoveevent = previous_mousemoveevent
+        hovers.uninstall_surface('tabline')
+    end)
+
     it('renders configured surfaces from providers', function()
         statuesque.register_provider('demo', function(context)
             return {
@@ -1899,6 +2430,54 @@ describe('statuesque render spec', function()
         assert_contains(rendered, ' 2')
         assert_contains(rendered, ' 1')
         assert(not rendered:find('9', 1, true), rendered)
+    end)
+
+    it('subscribes Stratum Git diff widgets to repository updates', function()
+        local previous_stratum = package.loaded['stratum']
+        local summary = {
+            added = 1,
+            changed = 0,
+            removed = 0,
+        }
+        package.loaded['stratum'] = {
+            path_summary = function(path)
+                assert(path:find('statuesque-stratum-refresh', 1, true), path)
+                return summary
+            end,
+        }
+        package.loaded['statuesque.widgets.git_diff'] = nil
+
+        local bufnr = vim.api.nvim_create_buf(true, false)
+        vim.api.nvim_buf_set_name(bufnr, ('/tmp/statuesque-stratum-refresh-%d.lua'):format(bufnr))
+        local widget = require('statuesque.widgets.git_diff')()
+        local updates = 0
+
+        assert_contains(
+            statuesque.render({ widget }, 'text', {
+                bufnr = bufnr,
+                on_update = function(component)
+                    assert_equal(component, widget)
+                    updates = updates + 1
+                end,
+            }),
+            ' 1'
+        )
+        summary = {
+            added = 0,
+            changed = 2,
+            removed = 1,
+        }
+
+        vim.api.nvim_exec_autocmds('User', { pattern = 'StratumRepositoryUpdated' })
+        local rendered = statuesque.render({ widget }, 'text', { bufnr = bufnr })
+
+        package.loaded['stratum'] = previous_stratum
+        package.loaded['statuesque.widgets.git_diff'] = nil
+        vim.api.nvim_buf_delete(bufnr, { force = true })
+
+        assert_equal(updates, 1)
+        assert_contains(rendered, ' 2')
+        assert_contains(rendered, ' 1')
     end)
 
     it('falls back to buffer Git diff state while Stratum is not ready', function()
@@ -2582,6 +3161,82 @@ describe('statuesque render spec', function()
         assert_equal(setup_opts.window.placement.vertical, 'top')
     end)
 
+    it('regression: restores and can reinstall the Incline refresh wrapper', function()
+        local integration = require('statuesque.integrations.incline')
+        integration.disable()
+        local previous_incline = package.loaded.incline
+        local refresh_calls = 0
+        local disable_calls = 0
+        local original_refresh = function(value)
+            refresh_calls = refresh_calls + 1
+            return value
+        end
+        local incline = {
+            setup = function() end,
+            disable = function()
+                disable_calls = disable_calls + 1
+            end,
+            refresh = original_refresh,
+        }
+        package.loaded.incline = incline
+
+        assert_equal(integration.setup({}, 'regression-incline'), true)
+        local first_wrapper = incline.refresh
+        assert(first_wrapper ~= original_refresh)
+        assert_equal(incline.refresh('first'), 'first')
+        integration.disable()
+        assert_equal(incline.refresh, original_refresh)
+
+        assert_equal(integration.setup({}, 'regression-incline'), true)
+        assert(incline.refresh ~= original_refresh)
+        assert(incline.refresh ~= first_wrapper)
+        assert_equal(incline.refresh('second'), 'second')
+        integration.disable()
+        assert_equal(incline.refresh, original_refresh)
+        assert_equal(disable_calls, 2)
+        assert(refresh_calls >= 4)
+
+        package.loaded.incline = previous_incline
+    end)
+
+    it('keeps downstream Incline refresh wrappers callable and unwraps when exposed', function()
+        local integration = require('statuesque.integrations.incline')
+        integration.disable()
+        local previous_incline = package.loaded.incline
+        local refresh_calls = 0
+        local original_refresh = function(value)
+            refresh_calls = refresh_calls + 1
+            return value, nil, 'tail'
+        end
+        local incline = {
+            setup = function() end,
+            disable = function() end,
+            refresh = original_refresh,
+        }
+        package.loaded.incline = incline
+
+        assert_equal(integration.setup({}, 'regression-incline-chain'), true)
+        local statuesque_wrapper = incline.refresh
+        local downstream_wrapper = function(...)
+            return statuesque_wrapper(...)
+        end
+        incline.refresh = downstream_wrapper
+
+        integration.disable()
+        assert_equal(incline.refresh, downstream_wrapper)
+        local ok, first, middle, tail = pcall(incline.refresh, 'downstream')
+        assert_equal(ok, true)
+        assert_equal(first, 'downstream')
+        assert_equal(middle, nil)
+        assert_equal(tail, 'tail')
+
+        incline.refresh = statuesque_wrapper
+        integration.disable()
+        assert_equal(incline.refresh, original_refresh)
+        assert(refresh_calls >= 2)
+        package.loaded.incline = previous_incline
+    end)
+
     it('composes right-sided incline preset surfaces without a fake left sigil', function()
         local surfaces = require('statuesque.presets.default').surfaces({
             preset = false,
@@ -2835,6 +3490,70 @@ describe('statuesque render spec', function()
         vim.o.winbar = previous_winbar
     end)
 
+    it('clears an explicitly replaced window-local render target', function()
+        local winid = vim.api.nvim_get_current_win()
+        local owner_bufnr = vim.api.nvim_create_buf(true, false)
+        local previous_winbar = vim.o.winbar
+
+        vim.o.winbar = 'ambient-winbar'
+        vim.api.nvim_win_set_buf(winid, owner_bufnr)
+        statuesque.replace_window_surface({
+            owner = 'fixture',
+            target = 'winbar',
+            winid = winid,
+            bufnr = owner_bufnr,
+            expression = 'owned-winbar',
+        })
+
+        statuesque.clear_window_surface(winid, 'winbar')
+
+        assert_equal(vim.wo[winid].winbar, 'ambient-winbar')
+        vim.o.winbar = previous_winbar
+    end)
+
+    it('regression: restores the exact pre-existing window-local surface value', function()
+        vim.cmd('split')
+        local winid = vim.api.nvim_get_current_win()
+        local bufnr = vim.api.nvim_get_current_buf()
+        vim.api.nvim_set_option_value('winbar', 'local-before-statuesque', { win = winid })
+
+        statuesque.replace_window_surface({
+            owner = 'regression',
+            target = 'winbar',
+            winid = winid,
+            bufnr = bufnr,
+            expression = 'owned-by-statuesque',
+        })
+        statuesque.clear_window_surface(winid, 'winbar')
+
+        assert_equal(vim.api.nvim_get_option_value('winbar', { win = winid }), 'local-before-statuesque')
+        vim.api.nvim_win_close(winid, true)
+    end)
+
+    it('restores inherited window-local surface state instead of freezing the old global value', function()
+        local previous_global = vim.api.nvim_get_option_value('winbar', { scope = 'global' })
+        vim.cmd('split')
+        local winid = vim.api.nvim_get_current_win()
+        local bufnr = vim.api.nvim_get_current_buf()
+        vim.api.nvim_set_option_value('winbar', 'global-before-replacement', { scope = 'global' })
+        vim.api.nvim_set_option_value('winbar', '', { win = winid, scope = 'local' })
+
+        statuesque.replace_window_surface({
+            owner = 'regression-inherited',
+            target = 'winbar',
+            winid = winid,
+            bufnr = bufnr,
+            expression = 'owned-by-statuesque',
+        })
+        vim.api.nvim_set_option_value('winbar', 'global-after-replacement', { scope = 'global' })
+        statuesque.clear_window_surface(winid, 'winbar')
+
+        assert_equal(vim.api.nvim_get_option_value('winbar', { win = winid, scope = 'local' }), '')
+        assert_equal(vim.api.nvim_get_option_value('winbar', { win = winid }), 'global-after-replacement')
+        vim.api.nvim_win_close(winid, true)
+        vim.api.nvim_set_option_value('winbar', previous_global, { scope = 'global' })
+    end)
+
     it('can replace a window-local render target for all windows displaying a buffer', function()
         local first_win = vim.api.nvim_get_current_win()
         local owner_bufnr = vim.api.nvim_create_buf(true, false)
@@ -3021,6 +3740,180 @@ describe('statuesque render spec', function()
         assert_equal(capabilities.align, false)
         assert_equal(rendered, 'leftright')
         assert_equal(clicked, false)
+    end)
+
+    it('restores owned options when setup disables a surface', function()
+        statuesque.setup({ manifold = false, preset = false, surfaces = {} })
+        vim.o.statusline = 'ambient-statusline'
+        vim.o.laststatus = 2
+
+        statuesque.setup({
+            manifold = false,
+            preset = false,
+            surfaces = {
+                statusline = {
+                    left = { { text = 'owned' } },
+                },
+            },
+        })
+        assert_equal(vim.o.laststatus, 3)
+        assert_contains(vim.o.statusline, 'render_installed_surface')
+
+        statuesque.setup({
+            manifold = false,
+            preset = false,
+            surfaces = {
+                statusline = false,
+            },
+        })
+        assert_equal(vim.o.statusline, 'ambient-statusline')
+        assert_equal(vim.o.laststatus, 2)
+    end)
+
+    it('keeps the working installation when setup validation fails', function()
+        local previous_statusline = vim.o.statusline
+        local previous_laststatus = vim.o.laststatus
+        statuesque.setup({ manifold = false, preset = false, surfaces = {} })
+        vim.o.statusline = 'transaction-ambient'
+        vim.o.laststatus = 2
+        statuesque.setup({
+            manifold = false,
+            preset = false,
+            surfaces = {
+                statusline = {
+                    left = { { text = 'working-installation' } },
+                },
+            },
+        })
+        local installed_expression = vim.o.statusline
+
+        local ok = pcall(statuesque.setup, {
+            manifold = false,
+            preset = false,
+            surfaces = {
+                statusline = {},
+            },
+        })
+
+        assert_equal(ok, false)
+        assert_equal(vim.o.statusline, installed_expression)
+        assert_equal(vim.o.laststatus, 3)
+        assert_contains(statuesque.render_surface('statusline', 'text'), 'working-installation')
+
+        statuesque.setup({ manifold = false, preset = false, surfaces = {} })
+        vim.o.statusline = previous_statusline
+        vim.o.laststatus = previous_laststatus
+    end)
+
+    it('rolls back the working installation when backend setup fails', function()
+        local previous_statusline = vim.o.statusline
+        local previous_laststatus = vim.o.laststatus
+        local previous_incline = package.loaded.incline
+        statuesque.setup({ manifold = false, preset = false, surfaces = {} })
+        vim.o.statusline = 'rollback-ambient'
+        vim.o.laststatus = 2
+        statuesque.setup({
+            manifold = false,
+            preset = false,
+            surfaces = {
+                statusline = {
+                    left = { { text = 'rollback-working' } },
+                },
+            },
+        })
+        local installed_expression = vim.o.statusline
+        package.loaded.incline = {
+            disable = function() end,
+            refresh = function() end,
+            setup = function()
+                error('forced Incline setup failure')
+            end,
+        }
+
+        local ok = pcall(statuesque.setup, {
+            manifold = false,
+            preset = false,
+            surfaces = {
+                window_label = {
+                    right = { { text = 'fails-to-install' } },
+                    backend = { name = 'incline' },
+                },
+            },
+        })
+
+        assert_equal(ok, false)
+        assert_equal(vim.o.statusline, installed_expression)
+        assert_equal(vim.o.laststatus, 3)
+        assert_contains(statuesque.render_surface('statusline', 'text'), 'rollback-working')
+
+        package.loaded.incline = previous_incline
+        statuesque.setup({ manifold = false, preset = false, surfaces = {} })
+        vim.o.statusline = previous_statusline
+        vim.o.laststatus = previous_laststatus
+    end)
+
+    it('regression: restores setup options independently according to ownership', function()
+        local previous_statusline = vim.o.statusline
+        local previous_laststatus = vim.o.laststatus
+        statuesque.setup({ manifold = false, preset = false, surfaces = {} })
+        vim.o.statusline = 'ambient-primary'
+        vim.o.laststatus = 2
+
+        statuesque.setup({
+            manifold = false,
+            preset = false,
+            surfaces = {
+                statusline = { left = { { text = 'owned' } } },
+            },
+        })
+        vim.o.statusline = 'user-primary'
+        statuesque.setup({
+            manifold = false,
+            preset = false,
+            surfaces = { statusline = false },
+        })
+        assert_equal(vim.o.statusline, 'user-primary')
+        assert_equal(vim.o.laststatus, 2)
+
+        vim.o.statusline = 'ambient-primary-two'
+        vim.o.laststatus = 2
+        statuesque.setup({
+            manifold = false,
+            preset = false,
+            surfaces = {
+                statusline = { left = { { text = 'owned-again' } } },
+            },
+        })
+        vim.o.laststatus = 1
+        statuesque.setup({
+            manifold = false,
+            preset = false,
+            surfaces = { statusline = false },
+        })
+        assert_equal(vim.o.statusline, 'ambient-primary-two')
+        assert_equal(vim.o.laststatus, 1)
+
+        vim.o.statusline = previous_statusline
+        vim.o.laststatus = previous_laststatus
+    end)
+
+    it('invalidates rendered caches on colorscheme changes', function()
+        local calls = 0
+        local cached = {
+            cache = { key = 'colorscheme-cache' },
+            render = function()
+                calls = calls + 1
+                return 'cached'
+            end,
+        }
+        statuesque.setup({ manifold = false })
+        statuesque.render({ cached }, 'statusline')
+        statuesque.render({ cached }, 'statusline')
+        assert_equal(calls, 1)
+
+        vim.api.nvim_exec_autocmds('ColorScheme', { modeline = false })
+        statuesque.render({ cached }, 'statusline')
+        assert_equal(calls, 2)
     end)
 
     it('installs the default preset on demand without manifold wiring', function()
