@@ -3938,7 +3938,10 @@ nnoremap <script> <MouseMove> :call <SID>StatuesqueMouseMoveProbe()<CR>
     end)
 
     it('uses real Tabulature state render specs in the default tabline when available', function()
-        with_runtimepath('../tabulature.nvim', function()
+        local tabulature_path = vim.env.TABULATURE_NVIM_PATH or '../tabulature.nvim'
+        assert(vim.fn.isdirectory(tabulature_path) == 1, 'TABULATURE_NVIM_PATH is not a plugin checkout')
+
+        with_runtimepath(tabulature_path, function()
             package.loaded['tabulature'] = nil
             package.loaded['tabulature.state'] = nil
             package.loaded['tabulature.render.statuesque'] = nil
