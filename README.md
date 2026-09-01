@@ -8,6 +8,33 @@ Statuesque is the render layer for the Manifold UI suite. It does not own tab,
 domain, notification, cmdline, or status data; producer plugins emit recursive
 render specs and Statuesque translates those specs into target-specific output.
 
+## Requirements
+
+- Neovim 0.11 or newer
+- optional integrations: `tabulature.nvim`, `manifold.nvim`, `incline.nvim`,
+  `nvim-navic`, `nvim-web-devicons`, `nvim-dap`, and `stratum.nvim`
+
+Linux is the primary supported and CI-tested platform. The project is in early
+development and currently publishes from `main` without a stable release tag.
+
+## Installation
+
+With `lazy.nvim`:
+
+```lua
+{
+    'griwes/statuesque.nvim',
+    opts = {
+        preset = 'default',
+        manifold = false,
+    },
+}
+```
+
+Add optional producer plugins as normal lazy dependencies when their widgets
+are used. Run `:checkhealth statuesque` after installation and see
+`:help statuesque` for the rendering contract.
+
 ## Render Spec
 
 A render spec is a string, a segment table, a function returning a render spec, a publisher component, or a nested list of render specs.
@@ -350,6 +377,10 @@ global statusline mode (`laststatus=3`).
 Incline surfaces are not installed through `install_surface`; the default preset
 uses `statuesque.integrations.incline` to configure `incline.nvim` when it is
 available, with Statuesque still owning the render spec and cache behavior.
+
+## License
+
+Apache-2.0. See [`LICENSE`](LICENSE).
 
 Backends advertise `capabilities`; built-in and runtimepath backends expose
 those capabilities through `backend_capabilities(target)`. Unsupported target

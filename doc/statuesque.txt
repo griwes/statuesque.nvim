@@ -1,0 +1,56 @@
+*statuesque.txt*                   Statuesque status rendering
+
+==============================================================================
+CONTENTS                                                     *statuesque-contents*
+
+1. Introduction ............................................ |statuesque|
+2. Setup .................................................... |statuesque-setup|
+3. Render specs ............................................. |statuesque-spec|
+4. API ...................................................... |statuesque-api|
+5. Health ................................................... |statuesque-health|
+
+==============================================================================
+INTRODUCTION                                                     *statuesque*
+
+Statuesque translates recursive, target-neutral render specs into statusline,
+tabline, winbar, Incline, text, or debug output. Producer plugins own state;
+Statuesque owns rendering and installation. Neovim 0.11 or newer is required.
+
+==============================================================================
+SETUP                                                   *statuesque-setup*
+
+>lua
+    require('statuesque').setup({
+        preset = 'default',
+        manifold = false,
+    })
+<
+
+Only the statusline auto-publishes by default. Set
+`publish.auto.tabline = true` or call `publish('tabline')` explicitly.
+
+==============================================================================
+RENDER SPECS                                             *statuesque-spec*
+
+A spec may be a string, segment, function, publisher component, or nested list.
+Segments support text, highlights, children, click/hover actions, semantic ids
+and roles, width constraints, truncation, and backend-specific raw content.
+
+Runtimepath widgets are loaded with `{ name = 'widget_name', opts = {} }`.
+Use `optional = true` when a missing producer should render no content.
+
+==============================================================================
+API                                                       *statuesque-api*
+
+Common functions are `setup()`, `normalize()`, `render()`, `compose()`,
+`register_provider()`, `set_surface()`, `render_surface()`, `publish()`,
+`install_surface()`, `invalidate()`, and `backend_capabilities()`.
+
+==============================================================================
+HEALTH                                                 *statuesque-health*
+
+Run: >vim
+    :checkhealth statuesque
+<
+
+vim:tw=78:ts=8:noet:ft=help:norl:
