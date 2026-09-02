@@ -66,9 +66,9 @@ Supported segment fields:
 - `style`: target-neutral style metadata for adapters that can use it.
 - `children`: recursive child specs.
 - `on_click`: function, function name, or semantic `{ id, args }` action.
-- `on_hover`: function, function name, or semantic `{ id, args }` action. Targets
-  must advertise whether this is supported, registered for later hit testing, or
-  degraded.
+- `on_hover`: function, function name, or semantic `{ id, args }` action. Target
+  capabilities report whether hover is supported, registered for later hit
+  testing, or degraded.
 - `id`: stable semantic id.
 - `role`: producer-defined semantic role such as `domain`, `tab`, or `status`.
 - `priority`, `min_width`, `max_width`, `truncate`: layout hints.
@@ -329,13 +329,13 @@ local rendered = require('statuesque').render(spec, 'my_surface')
 The backend contract is intentionally narrow:
 
 - `render(render_spec, opts)` is required.
-- `capabilities` is optional and should describe what producer plugins may rely
-  on before they render.
+- `capabilities` is optional; when present, it describes what producer plugins
+  can rely on before they render.
 - Backends that can install themselves may expose an `install(surface, opts)`
   helper, but Statuesque only calls built-in installation helpers today.
 - Invalid runtimepath modules fail with an explicit backend-contract error.
 
-Capability fields should be explicit:
+Capability fields are explicit:
 
 - `render_scope`: `'global'`, `'window'`, `'buffer'`, or another documented
   scope string.
@@ -384,7 +384,7 @@ Apache-2.0. See [`LICENSE`](LICENSE).
 
 Backends advertise `capabilities`; built-in and runtimepath backends expose
 those capabilities through `backend_capabilities(target)`. Unsupported target
-behavior should degrade explicitly. For example, the Incline backend marks
+behavior degrades explicitly. For example, the Incline backend marks
 unsupported click and hover handlers as Statuesque metadata instead of
 pretending those callbacks work. The `text` backend drops highlight, click,
 hover, and alignment semantics while preserving textual content and raw text.
