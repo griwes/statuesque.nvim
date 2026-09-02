@@ -43,10 +43,8 @@ jobs:
                   repository: griwes/tabulature.nvim
                   ref: main
                   path: .dependencies/tabulature.nvim
-            - uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1
-              with:
-                  neovim: true
-                  version: ${{ matrix.neovim }}
+            - name: Install Neovim
+              run: scripts/ci/install-neovim.sh '${{ matrix.neovim }}'
             - name: Run tests
               run: scripts/ci/test.sh
             - name: Run clean-install smoke
@@ -64,10 +62,8 @@ jobs:
                   repository: griwes/tabulature.nvim
                   ref: main
                   path: .dependencies/tabulature.nvim
-            - uses: rhysd/action-setup-vim@febef33995d6649302e9d88dda81e071b68f16a7 # v1
-              with:
-                  neovim: true
-                  version: stable
+            - name: Install Neovim
+              run: scripts/ci/install-neovim.sh stable
             - name: Run Tabulature against this Statuesque checkout
               working-directory: .dependencies/tabulature.nvim
               run: scripts/ci/test.sh
